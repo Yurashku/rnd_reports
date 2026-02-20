@@ -51,7 +51,7 @@ def execute_notebook(path: Path) -> None:
 
 
 def main() -> None:
-    notebooks = sorted(Path(".").glob("rnd_*/*.ipynb"))
+    notebooks = sorted(Path(".").glob("rnd_*/**/*.ipynb"))
     if not notebooks:
         print("Ноутбуки не найдены")
         return

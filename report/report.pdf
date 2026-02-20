@@ -1,0 +1,209 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Length 2956 >>
+stream
+BT
+/F1 11 Tf
+50 790 Td
+(R&D REPORT: MULTIPLE TESTING IN AB EXPERIMENTS AND PRE-EXPERIMENT BALANCE CHECKS) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(Table of Contents) Tj
+0 -14 Td
+(1. Problem statement and motivation) Tj
+0 -14 Td
+(2. Questions under review) Tj
+0 -14 Td
+(3. Main conclusions) Tj
+0 -14 Td
+(4. Recommended decision framework for rerandomization) Tj
+0 -14 Td
+(5. Simulation summary) Tj
+0 -14 Td
+(6. Representative artifact package) Tj
+0 -14 Td
+(7. Bibliography) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(1. Problem statement and motivation) Tj
+0 -14 Td
+(The team develops a Python tool for AB experiments. Before the pilot starts, the population) Tj
+0 -14 Td
+(is split) Tj
+0 -14 Td
+(into treatment/control \(or several homogeneous groups\), and balance is checked with t-tests,) Tj
+0 -14 Td
+(Kolmogorov-Smirnov tests, and chi-square tests over pre-defined covariates, including lagged) Tj
+0 -14 Td
+(target) Tj
+0 -14 Td
+(values. If balance is poor, randomization is repeated.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(2. Questions under review) Tj
+0 -14 Td
+(Q1: If the AB test has multiple target metrics, should we apply multiple-testing correction?) Tj
+0 -14 Td
+(Q2: If homogeneity checks include many features and tests, should we also adjust p-value) Tj
+0 -14 Td
+(thresholds) Tj
+0 -14 Td
+(for multiple testing during balancing?) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(3. Main conclusions) Tj
+0 -14 Td
+(Conclusion for Q1: Yes. For final product decisions on multiple target metrics, correction) Tj
+0 -14 Td
+(is usually) Tj
+0 -14 Td
+(required. Choose FWER control \(Bonferroni/Holm\) for strict false-positive protection, or FDR) Tj
+0 -14 Td
+(control) Tj
+0 -14 Td
+(\(Benjamini-Hochberg\) when power is prioritized.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(Conclusion for Q2: Usually, not as a primary mechanism. Balance checks are quality) Tj
+0 -14 Td
+(diagnostics of) Tj
+0 -14 Td
+(randomization, not confirmatory causal inference. Rule "reject split if any p < alpha") Tj
+0 -14 Td
+(becomes unstable) Tj
+0 -14 Td
+(when the number of checked covariates grows. Prefer effect-size based acceptance criteria) Tj
+0 -14 Td
+(\(e.g., max absolute SMD threshold\), an aggregate imbalance score, and a pre-defined maximum) Tj
+0 -14 Td
+(number) Tj
+0 -14 Td
+(of rerandomization iterations.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(4. Recommended decision framework for rerandomization) Tj
+0 -14 Td
+(Step A \(before launch\): pre-register covariates, prioritize key lagged targets, define) Tj
+0 -14 Td
+(balance metric\(s\),) Tj
+0 -14 Td
+(define acceptance thresholds, define max iterations K_max.) Tj
+0 -14 Td
+(Step B \(during splitting\): random split -> compute imbalance score -> accept if score <=) Tj
+0 -14 Td
+(threshold,) Tj
+0 -14 Td
+(otherwise iterate.) Tj
+0 -14 Td
+(Step C \(if no acceptable split by K_max\): avoid post-hoc threshold tuning; switch to) Tj
+0 -14 Td
+(stronger design) Tj
+0 -14 Td
+(\(stratified/block randomization\) or model-based adjustment in final analysis \(e.g.,) Tj
+0 -14 Td
+(CUPED/regression\).) Tj
+ET
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+4 0 obj
+<< /Length 1671 >>
+stream
+BT
+/F1 11 Tf
+50 790 Td
+(Step D \(final AB analysis\): apply pre-registered multiple-testing correction across final) Tj
+0 -14 Td
+(target metrics) Tj
+0 -14 Td
+(and report corrected + uncorrected values for transparency.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(5. Simulation summary) Tj
+0 -14 Td
+(The repository contains simulation code showing that with increasing number of checked) Tj
+0 -14 Td
+(covariates,) Tj
+0 -14 Td
+(probability of at least one significant p-value rises quickly even under valid) Tj
+0 -14 Td
+(randomization.) Tj
+0 -14 Td
+(This supports using stable balance criteria based on effect sizes, not only multiple) Tj
+0 -14 Td
+(p-values.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(6. Representative artifact package) Tj
+0 -14 Td
+(- This report in PDF and markdown.) Tj
+0 -14 Td
+(- Reproducible simulation script with fixed random seed and CSV outputs.) Tj
+0 -14 Td
+(- Executed notebooks with outputs.) Tj
+0 -14 Td
+(- README with full runbook and repository structure.) Tj
+0 -14 Td
+() Tj
+0 -14 Td
+(7. Bibliography) Tj
+0 -14 Td
+(Fisher \(1935\), Pocock \(1983\), Holm \(1979\), Benjamini & Hochberg \(1995\), Morgan & Rubin) Tj
+0 -14 Td
+(\(2012\),) Tj
+0 -14 Td
+(Lin \(2013\), Kohavi et al. \(2020\).) Tj
+0 -14 Td
+(Links:) Tj
+0 -14 Td
+(Morgan & Rubin: https://projecteuclid.org/journals/annals-of-statistics/volume-40/issue-2/) Tj
+0 -14 Td
+(Rerandomization-to-improve-covariate-balance-in-experiments/10.1214/12-AOS1008.full) Tj
+0 -14 Td
+(Benjamini & Hochberg: https://www.jstor.org/stable/2346101) Tj
+0 -14 Td
+(Holm: https://www.jstor.org/stable/4615733) Tj
+0 -14 Td
+(Kohavi et al.:) Tj
+0 -14 Td
+(https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+7 0 obj
+<< /Type /Catalog /Pages 6 0 R >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000079 00000 n 
+0000003087 00000 n 
+0000003213 00000 n 
+0000004936 00000 n 
+0000005062 00000 n 
+0000005125 00000 n 
+trailer
+<< /Size 8 /Root 7 0 R >>
+startxref
+5174
+%%EOF

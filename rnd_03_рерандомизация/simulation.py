@@ -1,4 +1,4 @@
-"""Pure-Python simulation for balance checks under multiple testing and rerandomization rules."""
+"""Симуляция правил приемки сплита при рерандомизации (чистый Python)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def normal_cdf(x: float) -> float:
 
 
 def welch_pvalue(a: list[float], b: list[float]) -> float:
-    """Approximate two-sided p-value using normal approximation."""
+    """Приближенное двустороннее p-value через нормальную аппроксимацию."""
     ma, mb = mean(a), mean(b)
     na, nb = len(a), len(b)
     if na < 2 or nb < 2:
@@ -28,6 +28,7 @@ def welch_pvalue(a: list[float], b: list[float]) -> float:
 
 
 def compute_smd(a: list[float], b: list[float]) -> float:
+    """Стандартизованное смещение между группами."""
     if len(a) < 2 or len(b) < 2:
         return 0.0
     va, vb = variance(a), variance(b)
@@ -38,6 +39,7 @@ def compute_smd(a: list[float], b: list[float]) -> float:
 
 
 def simulate_once(n: int, n_features: int, alpha: float, smd_thr: float) -> tuple[bool, bool, bool, bool]:
+    """Одна итерация: генерируем сплит и проверяем правила приемки."""
     x = [[random.gauss(0, 1) for _ in range(n_features)] for _ in range(n)]
     grp = [random.randint(0, 1) for _ in range(n)]
 
@@ -82,22 +84,22 @@ def run_simulation(n_iter: int, n: int, feature_grid: list[int], alpha: float, s
 
 def save_csv(rows: list[dict[str, float]], output: str) -> None:
     fieldnames = ["n_features", "accept_raw_p", "accept_bonferroni", "accept_smd", "p_any_sig"]
-    with open(output, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+    with open(output, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Simulate acceptance rates for rerandomization rules.")
-    p.add_argument("--n-iter", type=int, default=500)
-    p.add_argument("--n", type=int, default=500)
-    p.add_argument("--feature-grid", type=str, default="5,10,20,50")
-    p.add_argument("--alpha", type=float, default=0.05)
-    p.add_argument("--smd-thr", type=float, default=0.1)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--output", type=str, default="report/simulation_results.csv")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description="Симуляция частоты приемки сплита при разных правилах.")
+    parser.add_argument("--n-iter", type=int, default=500)
+    parser.add_argument("--n", type=int, default=500)
+    parser.add_argument("--feature-grid", type=str, default="5,10,20,50")
+    parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--smd-thr", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output", type=str, default="rnd_03_рерандомизация/simulation_results.csv")
+    return parser.parse_args()
 
 
 def main() -> None:
@@ -108,7 +110,7 @@ def main() -> None:
 
     for row in rows:
         print(row)
-    print(f"\nSaved to {args.output}")
+    print(f"\nСохранено в {args.output}")
 
 
 if __name__ == "__main__":

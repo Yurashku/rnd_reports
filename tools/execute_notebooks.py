@@ -1,4 +1,4 @@
-"""Execute all notebooks in repository without external dependencies."""
+"""Выполнение всех ноутбуков в репозитории без внешних зависимостей."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from pathlib import Path
 
 
 def execute_notebook(path: Path) -> None:
-    nb = json.loads(path.read_text())
+    notebook = json.loads(path.read_text(encoding="utf-8"))
     ns: dict = {}
     counter = 1
 
-    for cell in nb.get("cells", []):
+    for cell in notebook.get("cells", []):
         if cell.get("cell_type") != "code":
             continue
 
@@ -28,13 +28,7 @@ def execute_notebook(path: Path) -> None:
 
             text = stdout.getvalue()
             if text:
-                outputs.append(
-                    {
-                        "name": "stdout",
-                        "output_type": "stream",
-                        "text": text,
-                    }
-                )
+                outputs.append({"name": "stdout", "output_type": "stream", "text": text})
 
             cell["execution_count"] = counter
             cell["outputs"] = outputs
@@ -48,23 +42,24 @@ def execute_notebook(path: Path) -> None:
                     "traceback": traceback.format_exc().splitlines(),
                 }
             ]
-            path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+            path.write_text(json.dumps(notebook, ensure_ascii=False, indent=1), encoding="utf-8")
             raise
 
         counter += 1
 
-    path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    path.write_text(json.dumps(notebook, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def main() -> None:
-    notebooks = sorted(Path('.').glob('*/*.ipynb'))
+    notebooks = sorted(Path(".").glob("rnd_*/*.ipynb"))
     if not notebooks:
-        print('No notebooks found')
+        print("Ноутбуки не найдены")
         return
+
     for nb in notebooks:
         execute_notebook(nb)
-        print(f'Executed: {nb}')
+        print(f"Executed: {nb}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

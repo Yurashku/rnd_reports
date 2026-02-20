@@ -1,5 +1,0 @@
-n_features,accept_raw_p,accept_bonferroni,accept_smd,p_any_sig
-5,0.75,0.94,0.04,0.25
-10,0.52,0.96,0.01,0.48
-20,0.38,0.96,0.0,0.62
-50,0.11,0.95,0.0,0.89

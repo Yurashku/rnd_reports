@@ -98,9 +98,9 @@ def make_pdf(text: str, output: Path) -> None:
 
 
 def main() -> None:
-    content = Path("report/report_for_pdf.txt").read_text(encoding="utf-8")
-    make_pdf(content, Path("report/report.pdf"))
-    print("Generated report/report.pdf")
+    content = Path("rnd_03_рерандомизация/report_for_pdf.txt").read_text(encoding="utf-8")
+    make_pdf(content, Path("rnd_03_рерандомизация/report.pdf"))
+    print("Generated rnd_03_рерандомизация/report.pdf")
 
 
 if __name__ == "__main__":

@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--smd-thr", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output", type=str, default="rnd_03_рерандомизация/simulation_results.csv")
+    parser.add_argument("--output", type=str, default="rnd_01_ab_дизайн_экспериментов/03_рерандомизация/simulation_results.csv")
     return parser.parse_args()
 
 

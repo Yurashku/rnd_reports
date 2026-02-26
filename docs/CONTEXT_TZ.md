@@ -530,3 +530,21 @@ python tools/generate_pdf.py
 13. Сценарий масштабирования на следующие RnD предусмотрен (`planned_rnd`), но без технического каркаса.
 14. Документация на русском и в целом согласована со стилевым требованием.
 15. Текущее состояние подходит для research-коммуникации, но требует миграции для production-grade reproducibility.
+
+---
+
+## Target RnD layout
+
+Целевой формат репозитория фиксирован:
+
+- в корне должны быть ровно 4 RnD-директории:
+  - `01_bonferroni_aa_matching/`
+  - `02_pyspark_fast_aa/`
+  - `03_autoconfig_homogeneity_split/`
+  - `04_faiss_matcher_tradeoff/`
+- в каждой из 4 директорий должно быть ровно 3 файла:
+  - `notebook.ipynb`
+  - `report.md`
+  - `report.pdf`
+- любые вспомогательные скрипты, CI и утилиты должны лежать только вне этих 4 директорий (например, `tools/`, `scripts/`, `.github/`, `docs/`).
+- `report.pdf` обязан пересобираться автоматически из `report.md`.

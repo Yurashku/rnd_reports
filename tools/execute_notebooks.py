@@ -1,4 +1,4 @@
-"""Выполнение всех ноутбуков в репозитории без внешних зависимостей."""
+"""Пакетное выполнение целевых RnD-ноутбуков."""
 
 from __future__ import annotations
 
@@ -7,6 +7,13 @@ import io
 import json
 import traceback
 from pathlib import Path
+
+TARGET_NOTEBOOKS = [
+    Path("01_bonferroni_aa_matching/notebook.ipynb"),
+    Path("02_pyspark_fast_aa/notebook.ipynb"),
+    Path("03_autoconfig_homogeneity_split/notebook.ipynb"),
+    Path("04_faiss_matcher_tradeoff/notebook.ipynb"),
+]
 
 
 def execute_notebook(path: Path) -> None:
@@ -51,12 +58,9 @@ def execute_notebook(path: Path) -> None:
 
 
 def main() -> None:
-    notebooks = sorted(Path(".").glob("rnd_*/**/*.ipynb"))
-    if not notebooks:
-        print("Ноутбуки не найдены")
-        return
-
-    for nb in notebooks:
+    for nb in TARGET_NOTEBOOKS:
+        if not nb.exists():
+            raise FileNotFoundError(f"Ноутбук не найден: {nb}")
         execute_notebook(nb)
         print(f"Executed: {nb}")
 

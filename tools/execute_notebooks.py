@@ -13,6 +13,7 @@ TARGET_NOTEBOOKS = [
     Path("02_pyspark_fast_aa/notebook.ipynb"),
     Path("03_autoconfig_homogeneity_split/notebook.ipynb"),
     Path("04_faiss_matcher_tradeoff/notebook.ipynb"),
+    Path("05_rnd_iv_cupac_policy/notebook.ipynb"),
 ]
 
 

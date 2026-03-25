@@ -18,6 +18,7 @@ TARGETS = [
     Path("02_pyspark_fast_aa/report.md"),
     Path("03_autoconfig_homogeneity_split/report.md"),
     Path("04_faiss_matcher_tradeoff/report.md"),
+    Path("05_rnd_iv_cupac_policy/report.md"),
 ]
 
 

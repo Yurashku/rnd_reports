@@ -41,16 +41,25 @@ python tools/generate_pdf.py
 ## RnD-5: важные детали реализации
 - Ноутбук: `05_rnd_iv_cupac_policy/notebook.ipynb`.
 - Отчёт: `05_rnd_iv_cupac_policy/report.md` и `report.pdf`.
-- В начале ноутбука есть проверка локальной доступности:
-  - HypEx: <https://github.com/sb-ai-lab/HypEx>
-  - OffPolicyLab: <https://github.com/Yurashku/OffPolicyLab>
-- Если соответствующие локальные модули/репозитории не найдены в `workspace`, ноутбук продолжает работу с воспроизводимым fallback на `numpy/pandas/scipy` и явно фиксирует это в выводе.
+- В ноутбуке используется стратегия **library-first**:
+  - `linearmodels.iv.model.IV2SLS` для 2SLS/LATE;
+  - `hypex` для CUPAC и финального A/B-summary;
+  - `OffPolicyLab` (<https://github.com/Yurashku/OffPolicyLab>) для OPE.
+- Если конкретной библиотеки нет в окружении, соответствующий блок в ноутбуке **помечается как недоступный** (без самописной замены алгоритма).
 
 ## Принципы качества
 - Все отчёты и текстовые комментарии в коде ведутся на русском языке.
 - Все ноутбуки должны быть полностью выполнены и сохранены с актуальными output.
 - Графики сохраняются только внутри ноутбуков (без внешних `png/csv/txt` в RnD-директориях).
 - `report.md` — единственный источник содержания; `report.pdf` всегда пересобирается автоматически.
+
+## Дополнение по зависимостям RnD-5
+Рекомендуемая установка для полного режима:
+
+```bash
+pip install linearmodels hypex
+pip install git+https://github.com/Yurashku/OffPolicyLab.git
+```
 
 ## Legacy
 Старый набор материалов (`rnd_01_ab_дизайн_экспериментов`) сохранён в `legacy/rnd_01_ab_дизайн_экспериментов` как архив истории, чтобы не потерять предыдущие артефакты и контекст миграции.

@@ -6,3 +6,7 @@ jupyter>=1.0
 notebook>=7.0
 ipykernel>=6.0
 nbformat>=5.9
+linearmodels>=5.0
+hypex>=0.1
+# OffPolicyLab ставится из GitHub:
+# pip install git+https://github.com/Yurashku/OffPolicyLab.git

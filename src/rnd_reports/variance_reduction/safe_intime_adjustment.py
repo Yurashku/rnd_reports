@@ -26,10 +26,24 @@ def safe_intime_linear_adjustment(
 
     Возвращает ``(adjusted: pd.Series, info: dict)``. При пустом списке признаков
     возвращает исходный таргет без изменений.
+
+    NaN-политика: fail-fast с понятным ``ValueError``, если в таргете или safe-признаках
+    есть пропуски. Реальные датасеты могут содержать NaN — их обработку (импутация/
+    исключение) добавим отдельно; пока не допускаем «молчаливого» поведения.
     """
     y = df[target_col].reset_index(drop=True)
     if not safe_features:
         return y.copy(), {"used_features": [], "variance_reduction": 0.0}
+
+    if y.isna().any():
+        raise ValueError(
+            f"safe_intime_linear_adjustment: целевая колонка '{target_col}' содержит NaN"
+        )
+    na_cols = [c for c in safe_features if df[c].isna().any()]
+    if na_cols:
+        raise ValueError(
+            f"safe_intime_linear_adjustment: safe-признаки содержат NaN: {na_cols}"
+        )
 
     X = df[safe_features].reset_index(drop=True)
     model = LinearRegression().fit(X, y)

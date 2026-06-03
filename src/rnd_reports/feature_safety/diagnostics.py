@@ -17,7 +17,7 @@ import pandas as pd
 from scipy import stats
 
 from . import rules
-from .contracts import FeatureClass
+from .contracts import FeatureClass, policy_status
 
 # Роли (таксономия A–F), для которых дисбаланс по treatment — тревожный сигнал.
 
@@ -92,9 +92,12 @@ def diagnose(
 ) -> pd.DataFrame:
     """Таблица диагностики по признакам реестра/списка.
 
-    Колонки: ``feature, feature_class, smd, p_value, missingness_diff, gate_pass,
-    role_consistent``. ``role_consistent=False`` — признак, который по политике должен
-    быть сбалансирован, но разбалансирован (или наоборот).
+    Колонки: ``feature, feature_class, policy_status, smd, p_value,
+    missingness_diff, gate_pass, role_consistent``.
+    - ``policy_status`` — однозначная трактовка класса (candidate / excluded_for_dag /
+      forbidden / demo_only); forbidden/demo НЕ считаются «безопасными» независимо от баланса.
+    - ``role_consistent=False`` — признак, который по политике должен быть
+      сбалансирован, но разбалансирован.
     """
     if features is None:
         if registry is None:
@@ -117,6 +120,7 @@ def diagnose(
             {
                 "feature": f,
                 "feature_class": str(fc) if fc is not None else "",
+                "policy_status": policy_status(fc) if fc is not None else "",
                 "smd": round(r["smd"], 4),
                 "p_value": round(r["p_value"], 4),
                 "missingness_diff": round(r["missingness_diff"], 4),
@@ -129,6 +133,7 @@ def diagnose(
         columns=[
             "feature",
             "feature_class",
+            "policy_status",
             "smd",
             "p_value",
             "missingness_diff",

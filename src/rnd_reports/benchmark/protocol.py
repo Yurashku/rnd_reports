@@ -1,13 +1,17 @@
-"""Протокол оценки и метрик бенчмарка R&D-6 (Step 3).
+"""Протокол оценки и метрик бенчмарка R&D-6.
 
 Реализует:
 - ``estimate_ate`` — оценку ATE рандомизированного A/B (разность средних + Welch);
-- A/B-методы ``raw`` и ``ab_hypex`` (последний дополнительно сверяется с HypEx-A/B);
+- всю цепочку методов: ``ab_hypex`` (A/B baseline), ``hypex_cupac`` (reference/parity),
+  ``sklearn_cupac_A`` → ``sklearn_cupac_A_plus_B_linear`` →
+  ``sklearn_cupac_A_plus_B_plus_C_linear`` (CUPAC A + линейная коррекция по B и
+  прошедшим gate C), ``unsafe_demo_optional`` (демонстрация риска);
 - ``finalize_metrics`` — относительные и инкрементальные метрики (§6–7 контекста):
   снижение дисперсии и требуемой выборки vs A/B, vs sklearn CUPAC и vs предшественник.
 
-На этом шаге реализованы только baseline-методы (``raw``, ``ab_hypex``); CUPAC и
-safe-intime коррекции добавляются в последующих шагах. Алгоритмы коррекции тут нет.
+CUPAC берётся из :mod:`rnd_reports.variance_reduction.local_cupac`, линейная second-stage
+коррекция — из :mod:`rnd_reports.variance_reduction.safe_intime_adjustment`, gate для C —
+из :mod:`rnd_reports.feature_safety.diagnostics`.
 """
 
 from __future__ import annotations

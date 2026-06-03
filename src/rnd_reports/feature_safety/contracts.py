@@ -78,6 +78,31 @@ FORBIDDEN: tuple[FeatureClass, ...] = (
 # Только демонстрация риска; никогда не кандидат к использованию.
 DEMO_ONLY: tuple[FeatureClass, ...] = (FeatureClass.UNSAFE_DEMO,)
 
+# Статусы политики (для диагностики/отчётов): однозначная трактовка класса.
+POLICY_CANDIDATE = "candidate"  # A/B/C — допустимы в estimator
+POLICY_EXCLUDED_FOR_DAG = "excluded_for_dag"  # D — нужен causal/DAG-этап
+POLICY_FORBIDDEN = "forbidden"  # E/F — запрещены для основной оценки ATE
+POLICY_DEMO_ONLY = "demo_only"  # unsafe_demo — только демонстрация
+
+
+def policy_status(feature_class) -> str:
+    """Однозначный статус политики для класса признака.
+
+    ``candidate`` (A/B/C) · ``excluded_for_dag`` (D) · ``forbidden`` (E/F) ·
+    ``demo_only`` (unsafe_demo). Нужен, чтобы forbidden/demo не путались с
+    «role-consistent safe» в диагностике.
+    """
+    fc = coerce_feature_class(feature_class)
+    if fc in USABLE_IN_ESTIMATOR:
+        return POLICY_CANDIDATE
+    if fc in EXCLUDED_FROM_ESTIMATOR:
+        return POLICY_EXCLUDED_FOR_DAG
+    if fc in FORBIDDEN:
+        return POLICY_FORBIDDEN
+    if fc in DEMO_ONLY:
+        return POLICY_DEMO_ONLY
+    return POLICY_FORBIDDEN  # UNKNOWN и прочее — консервативно запрещаем
+
 
 def coerce_feature_class(value) -> FeatureClass:
     """Привести строку/Enum к ``FeatureClass`` (принимает значения вида ``A_pre_treatment``)."""

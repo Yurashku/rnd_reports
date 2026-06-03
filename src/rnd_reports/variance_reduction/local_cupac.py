@@ -289,3 +289,60 @@ class CUPACTransformer:
 
     def get_feature_mapping(self) -> Dict[str, str]:
         return dict(zip(self.lag_features, self.current_features))
+
+
+def _default_sklearn_models() -> Dict[str, object]:
+    return {
+        "Linear": LinearRegression(),
+        "Ridge": Ridge(alpha=0.5),
+        "Lasso": Lasso(alpha=0.01, max_iter=10000),
+    }
+
+
+def local_cupac_adjust(
+    df: pd.DataFrame,
+    target_col: str,
+    features: list[str],
+    models: Optional[Dict[str, object]] = None,
+    n_folds: int = 5,
+    random_state: Optional[int] = None,
+):
+    """Local CUPAC по явному списку признаков (feature-list API для R&D-6).
+
+    Кросс-фитом предсказывает ``target_col`` по ``features`` (out-of-fold), выбирает
+    лучшую модель по снижению дисперсии и делает CUPED θ-residualize на OOF-прогнозе
+    (чтобы не переобучаться при подгонке). Не использует колонку treatment.
+
+    Возвращает ``(adjusted: pd.Series, info: dict)`` с ``best_model``,
+    ``variance_reduction`` (%) и ``per_model`` (var.red. по моделям).
+    """
+    from sklearn.base import clone
+
+    y = df[target_col].reset_index(drop=True)
+    if not features:
+        return y.copy(), {"best_model": None, "variance_reduction": 0.0, "per_model": {}}
+
+    X = df[features].reset_index(drop=True)
+    models = models or _default_sklearn_models()
+
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+    per_model: dict[str, float] = {}
+    oof_by_model: dict[str, np.ndarray] = {}
+
+    for name, proto in models.items():
+        oof = np.full(len(y), np.nan)
+        for train_idx, val_idx in kf.split(X):
+            m = clone(proto)
+            m.fit(X.iloc[train_idx], y.iloc[train_idx])
+            oof[val_idx] = m.predict(X.iloc[val_idx])
+        oof_by_model[name] = oof
+        per_model[name] = variance_reduction_pct(y, oof)
+
+    best_model = max(per_model, key=per_model.get)
+    adjusted = cuped_adjust(y, oof_by_model[best_model])
+    info = {
+        "best_model": best_model,
+        "variance_reduction": per_model[best_model],
+        "per_model": per_model,
+    }
+    return adjusted, info

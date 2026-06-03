@@ -1,0 +1,12 @@
+# Бинарные артефакты — git не должен нормализовать переводы строк/диффать как текст
+*.pdf binary
+
+# Текстовые исходники — фиксируем LF, чтобы не было CRLF-шума в working copy
+*.py    text eol=lf
+*.ipynb text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.toml  text eol=lf
+*.txt   text eol=lf
+*.cfg   text eol=lf

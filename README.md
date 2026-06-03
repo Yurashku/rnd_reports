@@ -1,65 +1,87 @@
 # R&D-репозиторий по экспериментам HypEx
 
-Репозиторий приведён к унифицированному формату: в корне есть 5 тематических RnD-директорий, и в каждой лежат только три артефакта:
-- `notebook.ipynb` — воспроизводимые эксперименты на синтетике;
-- `report.md` — единый источник правды отчёта;
-- `report.pdf` — автогенерация из `report.md`.
+Репозиторий разделён на два слоя:
+
+- **Отчётные RnD** — каждая директория `rnd/NN_<topic>/` остаётся **report-oriented** и содержит:
+  - `notebook.ipynb` — воспроизводимые эксперименты на синтетике;
+  - `report.md` — единый источник правды отчёта;
+  - `report.pdf` — автогенерация из `report.md`;
+  - `README.md` — короткое описание (опционально).
+- **Общий код** — переиспользуемая логика вынесена из ноутбуков в устанавливаемый пакет `src/rnd_reports/` (src-layout). Ноутбуки становятся тонкой витриной поверх этого пакета.
 
 ## Структура репозитория
 
-### Актуальные RnD
-1. `01_bonferroni_aa_matching/`
-2. `02_pyspark_fast_aa/`
-3. `03_autoconfig_homogeneity_split/`
-4. `04_faiss_matcher_tradeoff/`
-5. `05_rnd_iv_cupac_policy/` — финальный RnD-5 по сценарию пилота с one-sided noncompliance: baseline A/B, Wald LATE, 2SLS, CUPAC-комбинации и policy-based OPE.
+```
+rnd/                 # отчётные RnD-директории
+src/rnd_reports/     # общий переиспользуемый код
+configs/             # конфиги экспериментов (по RnD)
+docs/                # контекст, ТЗ, методология, политики
+tests/               # тесты пакета
+tools/               # генерация PDF и пакетный прогон ноутбуков
+archive/             # исторические материалы (вне основной линии)
+```
 
-### Служебные директории
-- `tools/execute_notebooks.py` — пакетный запуск пяти целевых ноутбуков.
-- `tools/generate_pdf.py` — генерация пяти `report.pdf` из `report.md`.
-- `docs/CONTEXT_TZ.md` — контекст и целевое ТЗ, включая требования к layout.
-- `legacy/` — архив исторических материалов, перенесённый без изменений из старой структуры.
-- `planned_rnd/README.md` — памятка по формату для будущих исследований.
+### RnD и их статусы
+
+| # | Директория | Статус | Кратко |
+|---|------------|--------|--------|
+| 01 | `rnd/01_bonferroni_aa_matching/` | ✅ done | Множественные проверки и матчинг в A/A. |
+| 02 | `rnd/02_pyspark_fast_aa/` | ✅ done | Быстрый A/A на PySpark. |
+| 03 | `rnd/03_autoconfig_homogeneity_split/` | ✅ done | Автоконфиг и контроль однородности сплита. |
+| 04 | `rnd/04_faiss_matcher_tradeoff/` | 📄 report-only | FAISS-матчинг и trade-off; разработка ведётся вне этого репозитория. |
+| 05 | `rnd/05_iv_cupac_policy/` | ⏸ paused | Пилот с one-sided noncompliance: baseline A/B, Wald LATE, 2SLS, CUPAC, policy-based OPE. |
+| 06 | `rnd/06_safe_intime_cupac/` | 🚧 active | «Safe in-time covariates для CUPAC-style снижения дисперсии». |
+
+### Общий код — `src/rnd_reports/`
+
+Устанавливаемый пакет (src-layout) с подпакетами:
+
+- `variance_reduction/` — методы снижения дисперсии:
+  - `cuped.py` — классическая CUPED θ-корректировка;
+  - `local_cupac.py` — локальная R&D-реализация CUPAC (портирована из VarWar);
+  - `metrics.py` — расчёт снижения дисперсии и сводки;
+  - `hypex_cupac_adapter.py`, `safe_intime_adjustment.py` — заглушки RnD-6 (см. роадмап);
+- `feature_safety/` — контракты, реестр, правила и диагностики «безопасности» in-time ковариат (заглушки RnD-6);
+- `synthetic/` — генераторы синтетических данных и сценарии (`generators.py` портирован из VarWar);
+- `benchmark/` — протокол, раннеры и отчётность сравнений (заглушки RnD-6).
+
+Статус кода: миграция базовых блоков из VarWar выполнена (`synthetic.generators`, `variance_reduction.{cuped,metrics,local_cupac}`); модули самого RnD-6 пока заглушки. См. [`docs/migration_from_varwar.md`](docs/migration_from_varwar.md).
+
+### Сопутствующее
+- `configs/06_safe_intime_cupac/` — сценарии, наборы ковариат, методы.
+- `docs/` — `CONTEXT_TZ.md`, `06_safe_intime_cupac_context.md`, `feature_safety_policy.md`, `variance_reduction_methodology.md`, `migration_from_varwar.md`.
+- `tests/` — тесты пакета (импорт, генераторы, CUPED, local CUPAC, контракт заглушек).
+- `pyproject.toml` — конфигурация пакета; `conftest.py` добавляет `src/` в `sys.path`, поэтому импорт работает и без установки.
+- `archive/` — демо-ноутбуки RnD-5 (`rnd5_late_iv_offpolicy_demo*.ipynb`), вынесенные из корня.
 
 ## Быстрый старт
 
-### 1) Установить зависимости
 ```bash
+# 1) Зависимости
 pip install -r requirements.txt
-```
+# или установка пакета для разработки:
+pip install -e .[ml]
 
-### 2) Выполнить все ноутбуки (обязательно перед коммитом)
-```bash
+# 2) Пересобрать PDF-отчёты из Markdown (по всем rnd/*/report.md)
+python tools/generate_pdf.py
+
+# 3) (опционально) Пакетно выполнить ноутбуки — перезаписывает их output!
 python tools/execute_notebooks.py
 ```
 
-### 3) Пересобрать PDF-отчёты из Markdown
-```bash
-python tools/generate_pdf.py
-```
-
-## RnD-5: важные детали реализации
-- Ноутбук: `05_rnd_iv_cupac_policy/notebook.ipynb`.
-- Отчёт: `05_rnd_iv_cupac_policy/report.md` и `report.pdf`.
-- В ноутбуке используется стратегия **library-first**:
-  - `linearmodels.iv.model.IV2SLS` для 2SLS/LATE;
-  - `hypex` для CUPAC и финального A/B-summary;
-  - `OffPolicyLab` (<https://github.com/Yurashku/OffPolicyLab>) для OPE.
-- Если конкретной библиотеки нет в окружении, соответствующий блок в ноутбуке **помечается как недоступный** (без самописной замены алгоритма).
+`tools/generate_pdf.py` и `tools/execute_notebooks.py` автоматически находят цели через `rnd/*/report.md` и `rnd/*/notebook.ipynb` — новые RnD подхватываются без правки скриптов.
 
 ## Принципы качества
-- Все отчёты и текстовые комментарии в коде ведутся на русском языке.
-- Все ноутбуки должны быть полностью выполнены и сохранены с актуальными output.
-- Графики сохраняются только внутри ноутбуков (без внешних `png/csv/txt` в RnD-директориях).
-- `report.md` — единственный источник содержания; `report.pdf` всегда пересобирается автоматически.
+- Все отчёты и текстовые комментарии в коде — на русском языке.
+- Реальные/корпоративные данные **не коммитятся**; эксперименты — на синтетике с фиксированным seed.
+- Графики и артефакты остаются внутри ноутбуков (без внешних `png/csv/txt` в RnD-директориях).
+- `report.md` — единственный источник содержания; `report.pdf` пересобирается автоматически.
+- Алгоритмическая логика живёт в `src/rnd_reports/` и покрывается тестами; ноутбук — витрина.
 
-## Дополнение по зависимостям RnD-5
-Рекомендуемая установка для полного режима:
-
-```bash
-pip install linearmodels hypex
-pip install git+https://github.com/Yurashku/OffPolicyLab.git
-```
-
-## Legacy
-Старый набор материалов (`rnd_01_ab_дизайн_экспериментов`) сохранён в `legacy/rnd_01_ab_дизайн_экспериментов` как архив истории, чтобы не потерять предыдущие артефакты и контекст миграции.
+## Зависимости отдельных RnD
+- RnD-5 (paused), library-first: `linearmodels` (2SLS/LATE), `hypex` (CUPAC, A/B-summary), `OffPolicyLab` (OPE):
+  ```bash
+  pip install linearmodels hypex
+  pip install git+https://github.com/Yurashku/OffPolicyLab.git
+  ```
+- RnD-6 / общий код: `scikit-learn` (обязательно для тестов), `catboost` (опционально). Ставятся через `pip install -e .[ml]`.

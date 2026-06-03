@@ -1,0 +1,5 @@
+# Методы снижения дисперсии для бенчмарка R&D-6 (Safe in-time CUPAC).
+# Заглушка.
+# TODO: перечислить методы (baseline, cuped, local_cupac, hypex_cupac, safe_intime) и их параметры.
+
+methods: []

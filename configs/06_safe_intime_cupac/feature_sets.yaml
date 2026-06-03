@@ -1,0 +1,5 @@
+# Наборы ковариат для R&D-6 (Safe in-time CUPAC).
+# Заглушка.
+# TODO: описать наборы признаков и их пометки безопасности (safe / unsafe / under_review).
+
+feature_sets: []

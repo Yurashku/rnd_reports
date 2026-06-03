@@ -1,5 +1,21 @@
-# Синтетические сценарии для R&D-6 (Safe in-time CUPAC).
-# Заглушка: только синтетика, реальные/корпоративные данные не используются.
-# TODO: описать сценарии (размер выборки, seed, uptake, сила ковариат, уровень шума).
+# Синтетические сценарии R&D-6 (Step 2). Только синтетика; реальные данные не используются.
+# Параметры соответствуют аргументам rnd_reports.synthetic.scenarios.make_synthetic_scenario.
+# Истинный ATE = effect_size + mediator_c * mediator_b.
 
-scenarios: []
+defaults:
+  n: 4000
+  seed: 42
+  effect_size: 2.0
+  pre_strength: 1.0      # сила A (pre-treatment)
+  b_strength: 1.2        # сила B (expert-safe in-time)
+  c_strength: 1.0        # сила C (balance-gated in-time)
+  mediator_b: 1.0        # treatment -> mediator
+  mediator_c: 0.8        # mediator -> outcome
+  noise_sd: 1.0
+  rho: 0.7
+
+# Канонический сценарий первого шага.
+scenarios:
+  canonical:
+    # использует defaults; присутствуют все классы A–F + unsafe_demo
+    {}

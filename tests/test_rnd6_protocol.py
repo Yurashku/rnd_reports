@@ -63,9 +63,8 @@ def test_finalize_incremental_vs_predecessor() -> None:
 
 
 def test_unimplemented_method_raises() -> None:
-    # +B/+C/unsafe_demo ещё не реализованы (Step 5+)
     with pytest.raises(NotImplementedError):
-        run_method(_bds(n=500), "sklearn_cupac_A_plus_B_linear")
+        run_method(_bds(n=500), "nonexistent_method")
 
 
 def test_ab_hypex_has_parity_note() -> None:

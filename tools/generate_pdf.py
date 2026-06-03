@@ -13,13 +13,13 @@ TOP = 790
 LINE_H = 14
 MAX_CHARS = 92
 
-TARGETS = [
-    Path("01_bonferroni_aa_matching/report.md"),
-    Path("02_pyspark_fast_aa/report.md"),
-    Path("03_autoconfig_homogeneity_split/report.md"),
-    Path("04_faiss_matcher_tradeoff/report.md"),
-    Path("05_rnd_iv_cupac_policy/report.md"),
-]
+# Корень с отчётными RnD-директориями. Цели находятся автоматически: каждый
+# `rnd/<topic>/report.md` подхватывается без правки этого списка.
+RND_ROOT = Path("rnd")
+
+
+def discover_targets() -> list[Path]:
+    return sorted(RND_ROOT.glob("*/report.md"))
 
 
 def escape_pdf_text(s: str) -> str:
@@ -125,9 +125,10 @@ def make_pdf(text: str, output: Path) -> None:
 
 
 def main() -> None:
-    for md_path in TARGETS:
-        if not md_path.exists():
-            raise FileNotFoundError(f"Не найден файл отчёта: {md_path}")
+    targets = discover_targets()
+    if not targets:
+        raise FileNotFoundError(f"Не найдены report.md в {RND_ROOT}/*/")
+    for md_path in targets:
         report_text = md_to_plain_text(md_path.read_text(encoding="utf-8"))
         pdf_path = md_path.with_suffix(".pdf")
         make_pdf(report_text, pdf_path)

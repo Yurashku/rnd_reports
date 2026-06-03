@@ -37,6 +37,39 @@ class _NotImplementedAdapter:
         )
 
 
+class SyntheticAdapter:
+    """Тривиальный адаптер для синтетики: ``SyntheticScenario`` → ``BenchmarkDataset``.
+
+    В отличие от реальных датасетов, классы признаков на синтетике известны по
+    построению, поэтому адаптер просто переносит данные и готовую разметку в
+    единый формат ``BenchmarkDataset``.
+    """
+
+    name = "synthetic"
+
+    def to_benchmark_dataset(self, scenario) -> BenchmarkDataset:
+        return BenchmarkDataset(
+            data=scenario.data,
+            id_col=scenario.id_col,
+            treatment_col=scenario.treatment_col,
+            target_col=scenario.target_col,
+            feature_registry=scenario.feature_registry,
+        )
+
+
+def make_synthetic_benchmark_dataset(**kwargs) -> BenchmarkDataset:
+    """Сгенерировать синтетику и сразу обернуть в ``BenchmarkDataset``.
+
+    Все ``kwargs`` пробрасываются в
+    :func:`rnd_reports.synthetic.scenarios.make_synthetic_scenario`.
+    """
+    # Локальный импорт, чтобы избежать жёсткой связи datasets→synthetic на уровне модуля.
+    from ..synthetic.scenarios import make_synthetic_scenario
+
+    scenario = make_synthetic_scenario(**kwargs)
+    return SyntheticAdapter().to_benchmark_dataset(scenario)
+
+
 # Реестр заглушек-адаптеров по кандидатам каталога.
 ADAPTERS: dict[str, _NotImplementedAdapter] = {
     name: _NotImplementedAdapter(name)

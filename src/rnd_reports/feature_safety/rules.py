@@ -1,17 +1,34 @@
-"""TODO: правила проверки безопасности ковариат (отсутствие утечки назначения и т.п.).
+"""Практический safety-gate для balance-gated in-time признаков (класс C).
 
-Заглушка для R&D-6 «Safe in-time covariates для CUPAC».
-Алгоритмы не реализованы — см. docs/feature_safety_policy.md.
+R&D-6, Step 6. Декларативные пороги + решение «прошёл ли признак gate». Gate —
+практический фильтр (после исключения очевидных E/F), а не доказательство causal-
+безопасности (см. docs/feature_safety_policy.md §3C).
+
+Минимальный gate: признак считается прошедшим, если он **сбалансирован** между
+treatment/control (малый |SMD|) и не имеет treatment-зависимой доли пропусков.
 """
 
 from __future__ import annotations
 
-# TODO: наполнить набором правил безопасности; пока пусто.
+# Пороги gate (консервативные значения по умолчанию).
+MAX_ABS_SMD = 0.1  # |стандартизованная разность средних|
+MAX_MISSINGNESS_DIFF = 0.02  # |разность долей пропусков между группами|
+
+# Историческая заглушка (оставлена для обратной совместимости импорта).
 SAFETY_RULES: list = []
 
 
-def check(*args, **kwargs):
-    """TODO: применить правила безопасности к ковариате. Пока не реализовано."""
-    raise NotImplementedError(
-        "feature_safety.rules.check ещё не реализован (R&D-6, заглушка)."
-    )
+def passes_balance_gate(
+    smd: float,
+    missingness_diff: float = 0.0,
+    *,
+    max_abs_smd: float = MAX_ABS_SMD,
+    max_missingness_diff: float = MAX_MISSINGNESS_DIFF,
+) -> bool:
+    """Проходит ли признак balance/missingness gate.
+
+    Безопасным считаем сбалансированный по среднему и по пропускам признак.
+    """
+    if smd is None:
+        return False
+    return abs(smd) <= max_abs_smd and abs(missingness_diff) <= max_missingness_diff

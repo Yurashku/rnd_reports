@@ -19,19 +19,40 @@ from scipy import stats
 
 from ..datasets.contracts import BenchmarkDataset
 from ..feature_safety.contracts import FeatureClass
+from ..feature_safety.diagnostics import balance_gate
 from ..variance_reduction.hypex_cupac_adapter import run_hypex_cupac
 from ..variance_reduction.local_cupac import local_cupac_adjust
+from ..variance_reduction.safe_intime_adjustment import safe_intime_linear_adjustment
 from . import method_registry as mr
 from .contracts import (
     RESULT_COLUMNS,
     SAFETY_OK,
     SAFETY_REFERENCE,
     SAFETY_UNAVAILABLE,
+    SAFETY_UNSAFE_DEMO,
     MethodResult,
 )
 
-# Методы, реализованные на текущем шаге (Step 4).
-IMPLEMENTED_METHODS = ("raw", "ab_hypex", "sklearn_cupac_A", "hypex_cupac")
+# Методы, реализованные на текущем шаге (Step 5–7).
+IMPLEMENTED_METHODS = (
+    "raw",
+    "ab_hypex",
+    "hypex_cupac",
+    "sklearn_cupac_A",
+    "sklearn_cupac_A_plus_B_linear",
+    "sklearn_cupac_A_plus_B_plus_C_linear",
+    "unsafe_demo_optional",
+)
+
+# Полный набор методов бенчмарка по умолчанию (без внутреннего sanity-метода raw).
+DEFAULT_BENCHMARK_METHODS = (
+    "ab_hypex",
+    "hypex_cupac",
+    "sklearn_cupac_A",
+    "sklearn_cupac_A_plus_B_linear",
+    "sklearn_cupac_A_plus_B_plus_C_linear",
+    "unsafe_demo_optional",
+)
 
 
 def estimate_ate(df, outcome_col: str, treatment_col: str) -> dict:
@@ -235,6 +256,63 @@ def _hypex_cupac_result(
     return base
 
 
+def _cupac_plus_linear_result(
+    bds,
+    method: str,
+    predecessor: Optional[str],
+    feature_groups: list[str],
+    safe_features: list[str],
+    safety_status: str,
+    dataset_name: str,
+    dataset_type: str,
+    hypothesis_name: str,
+    random_state,
+    note: str = "",
+) -> MethodResult:
+    """CUPAC по классу A + линейная second-stage коррекция по ``safe_features``."""
+    a_features = bds.feature_registry.by_class(FeatureClass.A_PRE_TREATMENT)
+    cupac_adj, info = local_cupac_adjust(
+        bds.data, bds.target_col, a_features, random_state=random_state
+    )
+    tmp = bds.data.assign(_cupac=cupac_adj.to_numpy())
+    adj2, _ = safe_intime_linear_adjustment(tmp, "_cupac", safe_features)
+    tmp = tmp.assign(_adj=adj2.to_numpy())
+    est = estimate_ate(tmp, "_adj", bds.treatment_col)
+
+    notes = f"cupac best_model={info['best_model']}; +linear[{', '.join(safe_features) or '∅'}]"
+    if note:
+        notes += f"; {note}"
+    return MethodResult(
+        method=method,
+        dataset_name=dataset_name,
+        dataset_type=dataset_type,
+        target=bds.target_col,
+        hypothesis_name=hypothesis_name,
+        predecessor_method=predecessor,
+        n=est["n"],
+        ate=est["ate"],
+        se=est["se"],
+        p_value=est["p_value"],
+        ci_low=est["ci_low"],
+        ci_high=est["ci_high"],
+        adjusted_target_variance=est["variance"],
+        feature_groups_used=feature_groups,
+        n_features_used=len(a_features) + len(safe_features),
+        safety_status=safety_status,
+        diagnostic_notes=notes,
+    )
+
+
+def _gated_c_features(bds) -> tuple[list[str], list[str]]:
+    """Признаки класса C, прошедшие balance/missingness gate (и отклонённые)."""
+    c_features = bds.feature_registry.by_class(FeatureClass.C_BALANCE_GATED_INTIME)
+    if not c_features:
+        return [], []
+    passed, report = balance_gate(bds.data, bds.treatment_col, c_features)
+    rejected = [f for f in c_features if f not in passed]
+    return passed, rejected
+
+
 def run_method(
     bds: BenchmarkDataset,
     method: str,
@@ -244,7 +322,7 @@ def run_method(
     random_state: Optional[int] = None,
     cupac_models: Optional[list[str]] = None,
 ) -> MethodResult:
-    """Посчитать один метод. На Step 4 поддержаны raw, ab_hypex, sklearn_cupac_A, hypex_cupac."""
+    """Посчитать один метод (Step 5–7: вся цепочка + reference + unsafe_demo)."""
     if method in ("raw", "ab_hypex"):
         return _baseline_result(bds, method, dataset_name, dataset_type, hypothesis_name)
     if method == "sklearn_cupac_A":
@@ -255,8 +333,34 @@ def run_method(
         return _hypex_cupac_result(
             bds, dataset_name, dataset_type, hypothesis_name, cupac_models
         )
+
+    b_features = bds.feature_registry.by_class(FeatureClass.B_EXPERT_SAFE_INTIME)
+
+    if method == "sklearn_cupac_A_plus_B_linear":
+        return _cupac_plus_linear_result(
+            bds, method, "sklearn_cupac_A", ["A", "B"], list(b_features),
+            SAFETY_OK, dataset_name, dataset_type, hypothesis_name, random_state,
+        )
+    if method == "sklearn_cupac_A_plus_B_plus_C_linear":
+        gated_c, rejected = _gated_c_features(bds)
+        note = f"C gate: passed={gated_c or '∅'}, rejected={rejected or '∅'}"
+        return _cupac_plus_linear_result(
+            bds, method, "sklearn_cupac_A_plus_B_linear", ["A", "B", "C"],
+            list(b_features) + gated_c, SAFETY_OK,
+            dataset_name, dataset_type, hypothesis_name, random_state, note,
+        )
+    if method == "unsafe_demo_optional":
+        gated_c, _ = _gated_c_features(bds)
+        unsafe = bds.feature_registry.by_class(FeatureClass.UNSAFE_DEMO)
+        return _cupac_plus_linear_result(
+            bds, method, None, ["A", "B", "C", "unsafe_demo"],
+            list(b_features) + gated_c + list(unsafe), SAFETY_UNSAFE_DEMO,
+            dataset_name, dataset_type, hypothesis_name, random_state,
+            note="DEMONSTRATION ONLY — не кандидат к использованию",
+        )
+
     raise NotImplementedError(
-        f"Метод '{method}' ещё не реализован (Step 4 — {IMPLEMENTED_METHODS}). "
+        f"Метод '{method}' не поддержан. Доступны: {IMPLEMENTED_METHODS}. "
         "См. docs/06_safe_intime_cupac_implementation_plan.md."
     )
 
@@ -271,7 +375,7 @@ def run_benchmark(
     cupac_models: Optional[list[str]] = None,
 ) -> list[MethodResult]:
     """Прогнать набор методов и заполнить относительные/инкрементальные метрики."""
-    methods = methods or list(IMPLEMENTED_METHODS)
+    methods = methods or list(DEFAULT_BENCHMARK_METHODS)
     results = [
         run_method(
             bds,

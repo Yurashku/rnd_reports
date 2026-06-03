@@ -18,15 +18,20 @@ import numpy as np
 from scipy import stats
 
 from ..datasets.contracts import BenchmarkDataset
+from ..feature_safety.contracts import FeatureClass
+from ..variance_reduction.hypex_cupac_adapter import run_hypex_cupac
+from ..variance_reduction.local_cupac import local_cupac_adjust
 from . import method_registry as mr
 from .contracts import (
     RESULT_COLUMNS,
     SAFETY_OK,
+    SAFETY_REFERENCE,
+    SAFETY_UNAVAILABLE,
     MethodResult,
 )
 
-# Методы, реализованные на текущем шаге (Step 3).
-IMPLEMENTED_METHODS = ("raw", "ab_hypex")
+# Методы, реализованные на текущем шаге (Step 4).
+IMPLEMENTED_METHODS = ("raw", "ab_hypex", "sklearn_cupac_A", "hypex_cupac")
 
 
 def estimate_ate(df, outcome_col: str, treatment_col: str) -> dict:
@@ -150,20 +155,110 @@ def _baseline_result(
     )
 
 
+def _ate_from_ate_p(ate: float, p_value: float) -> dict:
+    """Реконструкция SE/CI из ATE и p-value (для метрик, пришедших из HypEx)."""
+    p = min(max(p_value, 1e-300), 1.0)
+    z = float(stats.norm.isf(p / 2.0))
+    se = abs(ate) / z if z > 0 else float("nan")
+    return {"se": se, "ci_low": ate - 1.96 * se, "ci_high": ate + 1.96 * se}
+
+
+def _sklearn_cupac_result(
+    bds, dataset_name, dataset_type, hypothesis_name, random_state
+) -> MethodResult:
+    """sklearn_cupac_A: основной CUPAC baseline по признакам класса A."""
+    spec = mr.by_name("sklearn_cupac_A")
+    a_features = bds.feature_registry.by_class(FeatureClass.A_PRE_TREATMENT)
+    adjusted, info = local_cupac_adjust(
+        bds.data, bds.target_col, a_features, random_state=random_state
+    )
+    tmp = bds.data.assign(_adj=adjusted.to_numpy())
+    est = estimate_ate(tmp, "_adj", bds.treatment_col)
+    return MethodResult(
+        method="sklearn_cupac_A",
+        dataset_name=dataset_name,
+        dataset_type=dataset_type,
+        target=bds.target_col,
+        hypothesis_name=hypothesis_name,
+        predecessor_method=spec.predecessor,
+        n=est["n"],
+        ate=est["ate"],
+        se=est["se"],
+        p_value=est["p_value"],
+        ci_low=est["ci_low"],
+        ci_high=est["ci_high"],
+        adjusted_target_variance=est["variance"],
+        feature_groups_used=["A"],
+        n_features_used=len(a_features),
+        safety_status=SAFETY_OK,
+        diagnostic_notes=f"cupac best_model={info['best_model']}",
+    )
+
+
+def _hypex_cupac_result(
+    bds, dataset_name, dataset_type, hypothesis_name, cupac_models
+) -> MethodResult:
+    """hypex_cupac: reference/parity CUPAC из HypEx (вне predecessor-chain)."""
+    import numpy as _np
+
+    hres = run_hypex_cupac(bds, cupac_models=cupac_models)
+    base = MethodResult(
+        method="hypex_cupac",
+        dataset_name=dataset_name,
+        dataset_type=dataset_type,
+        target=bds.target_col,
+        hypothesis_name=hypothesis_name,
+        predecessor_method=None,  # reference_only
+        feature_groups_used=["A"],
+        safety_status=SAFETY_REFERENCE,
+        diagnostic_notes=hres.get("notes", ""),
+    )
+    if hres.get("status") != "ok":
+        base.safety_status = (
+            SAFETY_UNAVAILABLE if hres.get("status") == "unavailable" else SAFETY_REFERENCE
+        )
+        base.diagnostic_notes = f"hypex_cupac {hres.get('status')}: {hres.get('notes','')}"
+        return base
+
+    raw_var = float(_np.var(bds.data[bds.target_col].to_numpy(dtype=float), ddof=1))
+    vr = hres["variance_reduction"]
+    base.n = int(bds.n)
+    base.ate = hres["ate"]
+    base.p_value = hres["p_value"]
+    base.adjusted_target_variance = raw_var * (1 - vr / 100.0)
+    base.n_features_used = len(hres["feature_set_used"])
+    base.diagnostic_notes = f"{hres['notes']}; best_model={hres['best_model']}"
+    se_ci = _ate_from_ate_p(hres["ate"], hres["p_value"])
+    base.se = se_ci["se"]
+    base.ci_low = se_ci["ci_low"]
+    base.ci_high = se_ci["ci_high"]
+    return base
+
+
 def run_method(
     bds: BenchmarkDataset,
     method: str,
     dataset_name: str = "synthetic",
     dataset_type: str = "synthetic",
     hypothesis_name: str = "",
+    random_state: Optional[int] = None,
+    cupac_models: Optional[list[str]] = None,
 ) -> MethodResult:
-    """Посчитать один метод. На Step 3 поддержаны только ``raw`` и ``ab_hypex``."""
-    if method not in IMPLEMENTED_METHODS:
-        raise NotImplementedError(
-            f"Метод '{method}' ещё не реализован (Step 3 — только {IMPLEMENTED_METHODS}). "
-            "См. docs/06_safe_intime_cupac_implementation_plan.md."
+    """Посчитать один метод. На Step 4 поддержаны raw, ab_hypex, sklearn_cupac_A, hypex_cupac."""
+    if method in ("raw", "ab_hypex"):
+        return _baseline_result(bds, method, dataset_name, dataset_type, hypothesis_name)
+    if method == "sklearn_cupac_A":
+        return _sklearn_cupac_result(
+            bds, dataset_name, dataset_type, hypothesis_name, random_state
         )
-    return _baseline_result(bds, method, dataset_name, dataset_type, hypothesis_name)
+    if method == "hypex_cupac":
+        return _hypex_cupac_result(
+            bds, dataset_name, dataset_type, hypothesis_name, cupac_models
+        )
+    raise NotImplementedError(
+        f"Метод '{method}' ещё не реализован (Step 4 — {IMPLEMENTED_METHODS}). "
+        "См. docs/06_safe_intime_cupac_implementation_plan.md."
+    )
 
 
 def run_benchmark(
@@ -172,11 +267,22 @@ def run_benchmark(
     dataset_name: str = "synthetic",
     dataset_type: str = "synthetic",
     hypothesis_name: str = "",
+    random_state: Optional[int] = None,
+    cupac_models: Optional[list[str]] = None,
 ) -> list[MethodResult]:
     """Прогнать набор методов и заполнить относительные/инкрементальные метрики."""
     methods = methods or list(IMPLEMENTED_METHODS)
     results = [
-        run_method(bds, m, dataset_name, dataset_type, hypothesis_name) for m in methods
+        run_method(
+            bds,
+            m,
+            dataset_name,
+            dataset_type,
+            hypothesis_name,
+            random_state=random_state,
+            cupac_models=cupac_models,
+        )
+        for m in methods
     ]
     finalize_metrics(results)
     return results

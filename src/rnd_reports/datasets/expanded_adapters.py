@@ -1,0 +1,684 @@
+"""Прототипы адаптеров расширенного датасет-скаутинга R&D-6 (Step 3 итерации).
+
+Превращают локально скачанные открытые датасеты в ``BenchmarkDataset`` (классические
+uplift A/B-датасеты) либо в документированный ``ResearchDataset`` (event-log / bandit /
+journey / advertising «песочницы», которые НЕ являются прямыми A/B uplift-бенчмарками).
+
+Жёсткие правила (см. docs/06_expanded_dataset_scouting.md, контекст §3):
+
+- Реальные данные читаются из gitignored ``data/06_safe_intime_cupac/<dataset>/`` и
+  **не коммитятся**; если файла нет — понятная ``FileNotFoundError`` с подсказкой.
+- Признаки CUPAC (класс A) приводятся к числовому виду без NaN (требование
+  ``local_cupac_adjust`` / ``safe_intime_linear_adjustment``).
+- Анонимные снимки (``f*``/``PC*``/``X_*``) размечаются как A — их **нельзя** объявлять
+  безопасными B/C.
+- В «песочницах» класс C — это *сконструированные* lag-признаки строго до анкера; они
+  помечаются как sandbox-кандидаты и **никогда** не выдаются за реальную B/C-валидацию.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from ..feature_safety.contracts import FeatureClass
+from .contracts import BenchmarkDataset
+from .loaders import DEFAULT_DATA_DIR
+
+# Корень для локально скачанных датасетов (gitignored).
+EXPANDED_DATA_DIR = DEFAULT_DATA_DIR
+
+# Метки типа датасета.
+DATASET_TYPE_REAL = "real"
+DATASET_TYPE_RESEARCH = "research_sandbox"
+DATASET_TYPE_EVENT_LOG = "event_log_sandbox"
+
+
+@dataclass
+class ResearchDataset:
+    """Обёртка для не-A/B «песочниц»: ``BenchmarkDataset`` + анкер/cutoff/обоснование.
+
+    Используется для event-log / bandit / journey / advertising датасетов, где прямой
+    A/B-контракт неуместен. Несёт явное определение анкера и time-cutoff, а также
+    пер-признаковое обоснование классов A/C/D/E/F. Любой класс C здесь —
+    *сконструированный* sandbox-кандидат, не реальная safe-in-time валидация.
+    """
+
+    benchmark: BenchmarkDataset
+    dataset_type: str  # research_sandbox / event_log_sandbox
+    anchor: str
+    time_cutoff: str
+    feature_rationale: dict[str, str] = field(default_factory=dict)
+    notes: str = ""
+
+    @property
+    def data(self) -> pd.DataFrame:
+        return self.benchmark.data
+
+
+# --------------------------------------------------------------------------- #
+# Вспомогательные функции
+# --------------------------------------------------------------------------- #
+
+
+def _require_file(path: Path, dataset: str, hint: str) -> Path:
+    """Проверить наличие локального файла; иначе — понятная ошибка с подсказкой."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Датасет '{dataset}' не найден по пути {path}. Реальные данные не "
+            f"коммитятся в git и качаются вручную в gitignored data/. {hint}"
+        )
+    return path
+
+
+def _numeric_no_nan(df: pd.DataFrame, cols: list[str], fill: float = 0.0) -> pd.DataFrame:
+    """Привести колонки к float и заполнить NaN (требование CUPAC/linear-stage)."""
+    out = df.copy()
+    for c in cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce").astype(float).fillna(fill)
+    return out
+
+
+def _one_hot(df: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """One-hot для object-категорий; вернуть (data, новые числовые колонки)."""
+    if not cols:
+        return df, []
+    dummies = pd.get_dummies(df[cols].astype(str), prefix=cols).astype(int)
+    return pd.concat([df.drop(columns=cols), dummies], axis=1), list(dummies.columns)
+
+
+# --------------------------------------------------------------------------- #
+# Классические uplift-датасеты → BenchmarkDataset (A-only)
+# --------------------------------------------------------------------------- #
+
+
+def load_lenta_benchmark_dataset(
+    path: Optional[str] = None, nrows: Optional[int] = None
+) -> BenchmarkDataset:
+    """Lenta retail uplift → ``BenchmarkDataset`` (A-only, именованные пре-кампейн агрегаты).
+
+    treatment = ``group == 'test'``; target = ``response_att``. Все числовые
+    пре-кампейн признаки (history/sale/cheque/k_var/... + age/children/main_format +
+    one-hot gender) — класс **A**. Реальных safe in-time B/C нет (окна 15d/1m/.../12m —
+    пре-период, не in-time). См. docs/06_real_dataset_raw_audit.md §2.
+    """
+    p = Path(path) if path else EXPANDED_DATA_DIR / "lenta" / "lenta_dataset.csv.gz"
+    _require_file(
+        p, "lenta", "sklift.datasets.fetch_lenta(data_home=<DATA_DIR>) → lenta/lenta_dataset.csv.gz."
+    )
+    df = pd.read_csv(p, nrows=nrows, low_memory=False)
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    out["treatment"] = (df["group"].astype(str) == "test").astype(int)
+    out["target"] = pd.to_numeric(df["response_att"], errors="coerce").astype(float)
+    out = out.dropna(subset=["target"]).reset_index(drop=True)
+    df = df.loc[out.index].reset_index(drop=True) if len(out) != len(df) else df
+
+    drop = {"group", "response_att"}
+    cat_cols = [c for c in df.columns if c not in drop and df[c].dtype == object]
+    num_cols = [c for c in df.columns if c not in drop and c not in cat_cols]
+
+    out = _numeric_no_nan(pd.concat([out, df[num_cols]], axis=1), num_cols)
+    out, oh_cols = _one_hot(pd.concat([out, df[cat_cols]], axis=1), cat_cols)
+
+    a_features = num_cols + oh_cols
+    registry = {c: "A_pre_treatment" for c in a_features}
+    return BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment",
+        target_col="target", feature_registry=registry,
+    )
+
+
+def load_orange_belgium_benchmark_dataset(
+    path: Optional[str] = None, nrows: Optional[int] = None
+) -> BenchmarkDataset:
+    """Orange Belgium churn uplift → ``BenchmarkDataset`` (A-only, анонимные PCA-признаки).
+
+    treatment = ``t``; target = ``y`` (churn). Признаки: ``PC1..PC160`` (PCA-компоненты,
+    числовые) + ``FACTOR1..FACTOR18`` (анонимные категории → one-hot) — все класс **A**.
+    PCA уничтожает семантику → safe B/C недоступны. См. raw audit §1.
+    """
+    p = Path(path) if path else EXPANDED_DATA_DIR / "orange_belgium" / "churn_uplift_anonymized.csv"
+    _require_file(p, "orange_belgium", "Прямой CSV (Dropbox из TheoVerhelst/Churn-Uplift-Dataset-Paper) или OpenML 45580.")
+    df = pd.read_csv(p, nrows=nrows)
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    out["treatment"] = pd.to_numeric(df["t"], errors="coerce").astype(int)
+    out["target"] = pd.to_numeric(df["y"], errors="coerce").astype(float)
+
+    pc_cols = [c for c in df.columns if c.upper().startswith("PC")]
+    factor_cols = [c for c in df.columns if c.upper().startswith("FACTOR")]
+    out = _numeric_no_nan(pd.concat([out, df[pc_cols]], axis=1), pc_cols)
+    out, oh_cols = _one_hot(pd.concat([out, df[factor_cols]], axis=1), factor_cols)
+
+    a_features = pc_cols + oh_cols
+    registry = {c: "A_pre_treatment" for c in a_features}
+    return BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment",
+        target_col="target", feature_registry=registry,
+    )
+
+
+def load_lazada_descn_benchmark_dataset(
+    path: Optional[str] = None, nrows: Optional[int] = None
+) -> BenchmarkDataset:
+    """Lazada/DESCN voucher uplift (рандомизированный тест) → ``BenchmarkDataset`` (A-only).
+
+    treatment = ``is_treat``; target = ``label``; ``f0..f82`` — анонимные признаки → A.
+    Используется ТОЛЬКО рандомизированный ``full_testset.csv`` (train смещён политикой).
+    См. raw audit §6.
+    """
+    p = (
+        Path(path)
+        if path
+        else EXPANDED_DATA_DIR / "lazada_descn" / "lzd_data_public" / "full_testset.csv"
+    )
+    _require_file(p, "lazada_descn", "Прямой zip lzd_data_public.zip (Dropbox из репозитория DESCN).")
+    df = pd.read_csv(p, nrows=nrows)
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    out["treatment"] = pd.to_numeric(df["is_treat"], errors="coerce").astype(int)
+    out["target"] = pd.to_numeric(df["label"], errors="coerce").astype(float)
+
+    f_cols = [c for c in df.columns if c.startswith("f") and c[1:].isdigit()]
+    out = _numeric_no_nan(pd.concat([out, df[f_cols]], axis=1), f_cols)
+
+    registry = {c: "A_pre_treatment" for c in f_cols}
+    return BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment",
+        target_col="target", feature_registry=registry,
+    )
+
+
+def load_x5_a_only_benchmark_dataset(
+    data_dir: Optional[str] = None, chunksize: int = 5_000_000
+) -> BenchmarkDataset:
+    """X5 RetailHero → ``BenchmarkDataset`` (A-only через инженерию истории покупок).
+
+    Мульти-таблица: ``uplift_train`` (client_id, treatment_flg, target) ⨝ ``clients``
+    (age, gender) ⨝ агрегаты ``purchases`` (45.8M строк). treatment = ``treatment_flg``;
+    target = ``target``. Признаки класса **A** — пер-клиентская история покупок
+    (count/sum/mean/points/recency) + age + one-hot gender.
+
+    ВАЖНО (ограничение): дата кампании в публичных данных не опубликована, поэтому
+    разделить покупки на pre/in-treatment нельзя — агрегаты берутся по всей истории и
+    трактуются как A (best-effort). Защитимых in-time C из этого датасета НЕ строим.
+    Покупки читаются чанками, чтобы не держать 45M строк в памяти целиком.
+    """
+    root = Path(data_dir) if data_dir else EXPANDED_DATA_DIR / "x5"
+    up = _require_file(root / "uplift_train.csv.gz", "x5_retailhero", "sklift.datasets.fetch_x5(data_home=<DATA_DIR>).")
+    cl = _require_file(root / "clients.csv.gz", "x5_retailhero", "sklift.datasets.fetch_x5(...).")
+    pu = _require_file(root / "purchases.csv.gz", "x5_retailhero", "sklift.datasets.fetch_x5(...).")
+
+    train = pd.read_csv(up)
+    clients = pd.read_csv(cl)
+
+    # Чанк-аддитивная векторная агрегация по client_id (память-безопасно, без iterrows).
+    # Суммы/счётчики накапливаем через .add(fill_value=0); максимум даты — через concat+max.
+    usecols = ["client_id", "transaction_datetime", "purchase_sum",
+               "regular_points_received", "product_quantity"]
+    sums = None  # DataFrame: n_rows, sum_purchase, sum_points, sum_qty
+    last_dt = None  # Series: max transaction_datetime по client_id
+    max_dt = pd.Timestamp.min
+    for chunk in pd.read_csv(pu, usecols=usecols, chunksize=chunksize,
+                             parse_dates=["transaction_datetime"]):
+        max_dt = max(max_dt, chunk["transaction_datetime"].max())
+        g = chunk.groupby("client_id")
+        part = pd.DataFrame({
+            "n_rows": g.size(),
+            "sum_purchase": g["purchase_sum"].sum(),
+            "sum_points": g["regular_points_received"].sum(),
+            "sum_qty": g["product_quantity"].sum(),
+        })
+        sums = part if sums is None else sums.add(part, fill_value=0.0)
+        part_dt = g["transaction_datetime"].max()
+        last_dt = part_dt if last_dt is None else (
+            pd.concat([last_dt, part_dt]).groupby(level=0).max())
+
+    hist = sums
+    hist["recency_days"] = (max_dt - last_dt).dt.days.astype(float)
+    hist["mean_purchase"] = hist["sum_purchase"] / hist["n_rows"].clip(lower=1)
+    hist = hist.reset_index().rename(columns={"index": "client_id"})
+
+    df = train.merge(clients, on="client_id", how="left").merge(hist, on="client_id", how="left")
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    out["treatment"] = pd.to_numeric(df["treatment_flg"], errors="coerce").astype(int)
+    out["target"] = pd.to_numeric(df["target"], errors="coerce").astype(float)
+
+    hist_cols = ["n_rows", "sum_purchase", "sum_points", "sum_qty",
+                 "recency_days", "mean_purchase", "age"]
+    out = _numeric_no_nan(pd.concat([out, df[hist_cols]], axis=1), hist_cols)
+    out, oh_cols = _one_hot(pd.concat([out, df[["gender"]]], axis=1), ["gender"])
+
+    a_features = hist_cols + oh_cols
+    registry = {c: "A_pre_treatment" for c in a_features}
+    return BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment",
+        target_col="target", feature_registry=registry,
+    )
+
+
+def _criteo_targets(bunch_target) -> dict[str, np.ndarray]:
+    """Извлечь все доступные Criteo-исходы из ``Bunch.target`` (multi-target-safe).
+
+    ``fetch_criteo`` может вернуть таргет как DataFrame (``target_col='all'`` → ``visit`` +
+    ``conversion``), как named Series, или как ndarray (один исход). Возвращаем
+    ``{имя_исхода: значения}`` без молчаливой потери второго исхода.
+    """
+    if hasattr(bunch_target, "columns"):  # DataFrame: несколько исходов
+        return {str(c): bunch_target[c].to_numpy() for c in bunch_target.columns}
+    if hasattr(bunch_target, "name") and bunch_target.name:  # named Series
+        return {str(bunch_target.name): np.asarray(bunch_target).ravel()}
+    return {"visit": np.asarray(bunch_target).ravel()}  # ndarray → дефолтный visit
+
+
+def load_criteo_percent10_benchmark_dataset(
+    data_home: Optional[str] = None,
+    target: str = "visit",
+) -> BenchmarkDataset:
+    """Criteo Uplift v2.1 (10%) → ``BenchmarkDataset`` (слабый A-only; exposure → E/unsafe).
+
+    treatment = ``treatment``; основной исход — ``target`` (``visit`` по умолчанию, либо
+    ``conversion``); ``f0..f11`` анонимны → класс **A**. Мульти-таргет: при наличии второго
+    исхода он регистрируется как **F_leakage** (outcome-derived, исключён из estimator), а не
+    выдаётся за признак. ``exposure`` (RTB-показ, post-treatment) → **E_mediator_risk**.
+    Требует локального sklift-кэша/сети. См. raw audit §3.
+    """
+    from sklift.datasets import fetch_criteo
+
+    home = str(data_home) if data_home else str(EXPANDED_DATA_DIR)
+    # target_col='all' → получаем все исходы; падаем обратно на дефолт при старом sklift.
+    try:
+        b = fetch_criteo(percent10=True, data_home=home, target_col="all")
+    except (TypeError, ValueError):
+        b = fetch_criteo(percent10=True, data_home=home)
+
+    df = b.data.copy()
+    tname = b.treatment_name if isinstance(b.treatment_name, str) else "treatment"
+    df[tname] = np.asarray(b.treatment).ravel()[: len(df)]
+
+    outcomes = _criteo_targets(b.target)
+    if target not in outcomes:
+        raise ValueError(
+            f"Criteo: запрошен target='{target}', доступны {sorted(outcomes)}. "
+            "Используйте 'visit' или 'conversion'."
+        )
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    out["treatment"] = pd.to_numeric(df[tname], errors="coerce").astype(int)
+    out["target"] = pd.to_numeric(pd.Series(outcomes[target][: len(df)]),
+                                  errors="coerce").astype(float)
+
+    f_cols = [c for c in df.columns if c.startswith("f") and c[1:].isdigit()]
+    out = _numeric_no_nan(pd.concat([out, df[f_cols]], axis=1), f_cols)
+
+    registry = {c: "A_pre_treatment" for c in f_cols}
+    # Второй исход (если есть) — outcome-derived → F_leakage, явно вне estimator.
+    for name, values in outcomes.items():
+        if name == target:
+            continue
+        out[name] = pd.to_numeric(pd.Series(values[: len(df)]),
+                                  errors="coerce").astype(float)
+        registry[name] = "F_leakage"
+    if "exposure" in df.columns:
+        out["exposure"] = pd.to_numeric(df["exposure"], errors="coerce").astype(float)
+        registry["exposure"] = "E_mediator_risk"  # post-treatment, unsafe_demo
+    return BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment",
+        target_col="target", feature_registry=registry,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Не-A/B «песочницы» → ResearchDataset (event-log / bandit / advertising)
+# --------------------------------------------------------------------------- #
+
+
+def load_open_bandit_research_dataset(
+    behavior_policy: str = "random", campaign: str = "all"
+) -> ResearchDataset:
+    """Open Bandit Dataset (ZOZOTOWN) → ``ResearchDataset`` (logged-bandit песочница).
+
+    НЕ простой A/B: логированная политика рекомендаций. treatment = ``action`` показан
+    vs нет (бинаризуем по позиции/факту показа как демо); target = ``reward`` (click).
+    Разметка-подсказка: контекст пользователя/товара = **A**; ``position`` / ``pscore``
+    (propensity) / ``action`` = **D** (механика политики); сконструированные лаги истории
+    пользователя строго до timestamp = sandbox **C**; ``reward``-производные = **F**.
+    Требует пакет ``obp`` (ставится в .venv, не в зависимости проекта).
+    """
+    try:
+        from obp.dataset import OpenBanditDataset
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "Open Bandit требует пакет 'obp' (локально: .venv/bin/pip install obp)."
+        ) from exc
+
+    ds = OpenBanditDataset(behavior_policy=behavior_policy, campaign=campaign)
+    fb = ds.obtain_batch_bandit_feedback()
+    n = fb["n_rounds"]
+    ctx = np.asarray(fb["context"])
+    out = pd.DataFrame({c: ctx[:, i] for i, c in
+                        enumerate([f"ctx_{j}" for j in range(ctx.shape[1])])})
+    out.insert(0, "id", np.arange(n))
+    # Демонстрационный treatment: показан ли «топовый» action (position==0).
+    out["treatment"] = (np.asarray(fb["position"]) == 0).astype(int)
+    out["target"] = np.asarray(fb["reward"]).astype(float)
+    out["action"] = np.asarray(fb["action"]).astype(float)
+    out["position"] = np.asarray(fb["position"]).astype(float)
+    out["pscore"] = np.asarray(fb["pscore"]).astype(float)
+
+    a_features = [c for c in out.columns if c.startswith("ctx_")]
+    registry = {c: "A_pre_treatment" for c in a_features}
+    registry.update({"action": "D_dag_required", "position": "D_dag_required",
+                     "pscore": "D_dag_required"})
+    bds = BenchmarkDataset(data=out, id_col="id", treatment_col="treatment",
+                           target_col="target", feature_registry=registry)
+    return ResearchDataset(
+        benchmark=bds, dataset_type=DATASET_TYPE_EVENT_LOG,
+        anchor="impression/round timestamp (logged policy decision)",
+        time_cutoff="features known at the bidding/recommendation moment",
+        feature_rationale={
+            "ctx_*": "A: пользовательский/товарный контекст до действия",
+            "action/position/pscore": "D: механика политики/propensity (нужен DAG)",
+            "reward-derived (lagged within session)": "F: производные от исхода/leakage",
+        },
+        notes="Logged-bandit, не рандомизированный A/B. treatment бинаризован как демо.",
+    )
+
+
+def _agg_purchases(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """Househld-агрегаты покупок за окно: spend / баскеты / юниты / товары."""
+    g = frame.groupby("household_id")
+    return pd.DataFrame({
+        f"{prefix}_spend": g["sales_value"].sum(),
+        f"{prefix}_n_baskets": g["basket_id"].nunique(),
+        f"{prefix}_n_units": g["quantity"].sum(),
+        f"{prefix}_n_products": g["product_id"].nunique(),
+    })
+
+
+def load_completejourney_research_dataset(
+    data_dir: Optional[str] = None,
+    anchor_campaign_id: Optional[int] = None,
+    cutoff_days: int = 7,
+    horizon_days: int = 30,
+    min_pre_days: int = 60,
+) -> ResearchDataset:
+    """dunnhumby Complete Journey → ``ResearchDataset`` (retail journey, observational).
+
+    НЕ рандомизированный A/B (кампании таргетируются, не назначаются случайно) — это
+    **observational sandbox для исследования C/D-механики, не доказательство** safe in-time.
+
+    Контракт строится вокруг анкера = ``start_date`` выбранной кампании
+    (``campaign_descriptions``). По умолчанию берётся кампания максимального охвата, чьё окно
+    ``[start, start+horizon_days]`` помещается в диапазон транзакций и оставляет
+    ``>= min_pre_days`` пред-истории. Househld-уровень, разметка относительно анкера:
+
+    - **A** (pre-treatment, ``tx < anchor_start``): pre-покупки (spend/баскеты/юниты/товары,
+      coupon_disc) + статичная демография (one-hot);
+    - **C-sandbox** (``[anchor_start, anchor_start+cutoff_days)``): ранняя in-window активность
+      строго **до** окна исхода — *сконструированный* C-кандидат, не реальная B/C-валидация;
+    - **D** (механика): число кампаний, полученных до анкера (таргетинг/политика);
+    - **E** (пост-treatment): redemptions внутри окна исхода;
+    - **target**: spend в ``[anchor_start+cutoff_days, anchor_start+horizon_days)`` (строго
+      после C-окна, чтобы C не пересекался с исходом);
+    - **treatment** (демо, observational): домохозяйство получило анкер-кампанию.
+
+    Требует локальных CSV (``transactions.csv``, ``campaign_descriptions.csv``,
+    ``campaigns.csv``; опционально ``demographics.csv``, ``coupon_redemptions.csv``) —
+    см. сборку в data/06_safe_intime_cupac/dunnhumby/. При отсутствии — понятная ошибка.
+    """
+    root = Path(data_dir) if data_dir else EXPANDED_DATA_DIR / "dunnhumby"
+    hint = ("dunnhumby Complete Journey: соберите CSV через R-пакет completejourney "
+            "(или конвертацией .rds/.rda) в dunnhumby/.")
+    tx_path = _require_file(root / "transactions.csv", "dunnhumby", hint)
+    cd_path = _require_file(root / "campaign_descriptions.csv", "dunnhumby", hint)
+    cmp_path = _require_file(root / "campaigns.csv", "dunnhumby", hint)
+
+    cdesc = pd.read_csv(cd_path, parse_dates=["start_date", "end_date"])
+    campaigns = pd.read_csv(cmp_path)
+    tx = pd.read_csv(
+        tx_path, parse_dates=["transaction_timestamp"],
+        usecols=["household_id", "basket_id", "product_id", "quantity",
+                 "sales_value", "coupon_disc", "transaction_timestamp"],
+    )
+    tmin, tmax = tx["transaction_timestamp"].min(), tx["transaction_timestamp"].max()
+
+    # Выбор анкер-кампании: max охват среди помещающихся в диапазон с pre-историей.
+    reach = campaigns.groupby("campaign_id")["household_id"].nunique()
+    cdesc = cdesc.assign(n_hh=cdesc["campaign_id"].map(reach).fillna(0).astype(int))
+    if anchor_campaign_id is None:
+        fits = cdesc[
+            (cdesc["start_date"] - tmin >= pd.Timedelta(days=min_pre_days))
+            & (cdesc["start_date"] + pd.Timedelta(days=horizon_days) <= tmax)
+        ]
+        if fits.empty:
+            raise ValueError(
+                "dunnhumby: ни одна кампания не оставляет достаточного pre/post-окна; "
+                "ослабьте min_pre_days/horizon_days или задайте anchor_campaign_id."
+            )
+        anchor_campaign_id = int(fits.sort_values("n_hh", ascending=False)["campaign_id"].iloc[0])
+    arow = cdesc.loc[cdesc["campaign_id"] == anchor_campaign_id]
+    if arow.empty:
+        raise ValueError(f"dunnhumby: campaign_id={anchor_campaign_id} нет в campaign_descriptions.")
+    anchor_start = arow["start_date"].iloc[0]
+    cwin_end = anchor_start + pd.Timedelta(days=cutoff_days)
+    horizon_end = anchor_start + pd.Timedelta(days=horizon_days)
+
+    # Население: все домохозяйства из транзакций; treatment = получили анкер-кампанию.
+    out = pd.DataFrame({"household_id": np.sort(tx["household_id"].unique())})
+    treated = set(campaigns.loc[campaigns["campaign_id"] == anchor_campaign_id, "household_id"])
+    out["treatment"] = out["household_id"].isin(treated).astype(int)
+
+    ts = tx["transaction_timestamp"]
+    pre = tx[ts < anchor_start]
+    cwin = tx[(ts >= anchor_start) & (ts < cwin_end)]
+    post = tx[(ts >= cwin_end) & (ts < horizon_end)]
+
+    a_pre = _agg_purchases(pre, "pre")
+    a_pre["pre_coupon_disc"] = pre.groupby("household_id")["coupon_disc"].sum()
+    c_win = _agg_purchases(cwin, "cwin")[["cwin_spend", "cwin_n_baskets", "cwin_n_units"]]
+    target = post.groupby("household_id")["sales_value"].sum().rename("target")
+
+    out = (out.merge(a_pre, on="household_id", how="left")
+              .merge(c_win, on="household_id", how="left")
+              .merge(target, on="household_id", how="left"))
+
+    # D: число кампаний, полученных строго до анкера (интенсивность таргетинга).
+    cmp_dated = campaigns.merge(cdesc[["campaign_id", "start_date"]], on="campaign_id", how="left")
+    prior = (cmp_dated[cmp_dated["start_date"] < anchor_start]
+             .groupby("household_id")["campaign_id"].nunique().rename("n_prior_campaigns"))
+    out = out.merge(prior, on="household_id", how="left")
+
+    # E: redemptions внутри окна исхода (пост-treatment downstream).
+    redempt_path = root / "coupon_redemptions.csv"
+    if redempt_path.exists():
+        red = pd.read_csv(redempt_path, parse_dates=["redemption_date"])
+        rin = red[(red["redemption_date"] >= anchor_start) & (red["redemption_date"] < horizon_end)]
+        out = out.merge(
+            rin.groupby("household_id").size().rename("redemptions_in_window"),
+            on="household_id", how="left",
+        )
+    else:
+        out["redemptions_in_window"] = 0
+
+    # A-демография (one-hot статичных категорий), если доступна.
+    demo_oh: list[str] = []
+    demo_path = root / "demographics.csv"
+    if demo_path.exists():
+        demo = pd.read_csv(demo_path)
+        cat_cols = [c for c in demo.columns if c != "household_id"]
+        out = out.merge(demo, on="household_id", how="left")
+        out, demo_oh = _one_hot(out, cat_cols)
+
+    a_num = ["pre_spend", "pre_n_baskets", "pre_n_units", "pre_n_products", "pre_coupon_disc"]
+    c_num = ["cwin_spend", "cwin_n_baskets", "cwin_n_units"]
+    d_num = ["n_prior_campaigns"]
+    e_num = ["redemptions_in_window"]
+    out = _numeric_no_nan(out, a_num + c_num + d_num + e_num)
+    out["target"] = pd.to_numeric(out["target"], errors="coerce").astype(float).fillna(0.0)
+    out["id"] = out["household_id"].astype(int)
+
+    registry: dict[str, str] = {}
+    for c in a_num + demo_oh:
+        registry[c] = "A_pre_treatment"
+    for c in c_num:
+        registry[c] = "C_balance_gated_intime"
+    for c in d_num:
+        registry[c] = "D_dag_required"
+    for c in e_num:
+        registry[c] = "E_mediator_risk"
+
+    bds = BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment", target_col="target",
+        feature_registry=registry,
+    )
+    return ResearchDataset(
+        benchmark=bds, dataset_type=DATASET_TYPE_RESEARCH,
+        anchor=f"campaign {anchor_campaign_id} start_date={anchor_start.date()} "
+               f"(reach={len(treated)} hh)",
+        time_cutoff=(
+            f"A: tx<{anchor_start.date()}; C-window: [start, start+{cutoff_days}d); "
+            f"target: spend в [start+{cutoff_days}d, start+{horizon_days}d)"
+        ),
+        feature_rationale={
+            "pre_*/demographics": "A: пред-анкерная история покупок и статичная демография",
+            "cwin_*": "C-sandbox: ранняя in-window активность строго до окна исхода (constructed)",
+            "n_prior_campaigns": "D: интенсивность таргетинга кампаниями (нужен DAG)",
+            "redemptions_in_window": "E: redemptions внутри окна исхода (пост-treatment)",
+        },
+        notes=("Observational (кампания не рандомизирована) — demo-only песочница для C/D, "
+               "НЕ реальная safe in-time валидация. treatment = получение анкер-кампании."),
+    )
+
+
+def load_criteo_private_ad_research_dataset(
+    data_dir: Optional[str] = None,
+    sample_file: str = "sample_10k.parquet",
+    target: str = "is_clicked",
+) -> ResearchDataset:
+    """CriteoPrivateAd → ``ResearchDataset`` (advertising logs, D/F-песочница).
+
+    НЕ классический treatment/control — это логи показов рекламы. Строится event-log
+    sandbox по локальному parquet-сэмплу (схема 150 колонок):
+
+    - **A** (pre-display контекст): ``features_ctx_not_constrained_*``,
+      ``features_browser_bits_constrained_*`` — известны в момент запроса показа;
+    - **D** (механика/приватность): ``features_kv_*constrained_*`` (privacy-бакеты),
+      ``campaign_id``, ``publisher_id``;
+    - **F** (outcome-derived): ``is_visit`` / ``is_click_landed`` / ``nb_sales`` и
+      ``*_delay_after_display_array`` (delayed-report конструкции) → counts;
+    - **target**: ``target`` (по умолчанию ``is_clicked``);
+    - **treatment** (демо): топ-показ ``display_order == 1`` — бинаризация ради песочницы,
+      **не** рандомизированное лечение.
+
+    Колонки ``features_not_available_*`` (плейсхолдеры) и константы исключаются.
+    Требует локального parquet (см. сборку sample_10k через HF ``datasets`` в
+    data/06_safe_intime_cupac/criteo_private_ad/). При отсутствии — понятная ошибка.
+    """
+    root = Path(data_dir) if data_dir else EXPANDED_DATA_DIR / "criteo_private_ad"
+    path = _require_file(
+        root / sample_file, "criteo_private_ad",
+        "CriteoPrivateAd: сохраните stream-сэмпл (HF datasets) как sample_10k.parquet.",
+    )
+    df = pd.read_parquet(path)
+    if target not in df.columns:
+        raise ValueError(
+            f"criteo_private_ad: target='{target}' нет в данных; доступны метки исхода "
+            "is_clicked/is_visit/is_click_landed."
+        )
+    if "display_order" not in df.columns:
+        raise ValueError("criteo_private_ad: ожидается колонка display_order для демо-treatment.")
+
+    a_cols = [c for c in df.columns
+              if c.startswith(("features_ctx_not_constrained",
+                               "features_browser_bits_constrained"))]
+    d_feat = [c for c in df.columns
+              if c.startswith(("features_kv_bits_constrained", "features_kv_not_constrained"))]
+    d_mech = [c for c in ("campaign_id", "publisher_id") if c in df.columns]
+    f_scalar = [c for c in ("is_visit", "is_click_landed", "nb_sales") if c in df.columns]
+    delay_cols = [c for c in df.columns if c.endswith("_delay_after_display_array")]
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    if "user_id" in df.columns:
+        out["user_id"] = df["user_id"].to_numpy()
+    out["target"] = pd.to_numeric(df[target], errors="coerce").fillna(0.0).astype(float)
+    out["treatment"] = (
+        pd.to_numeric(df["display_order"], errors="coerce") == 1
+    ).astype(int)
+
+    def _add_numeric(cols: list[str]) -> list[str]:
+        """Числовая коррекция + отбрасывание констант/нечисловых пустых колонок."""
+        kept: list[str] = []
+        for c in cols:
+            s = pd.to_numeric(df[c], errors="coerce").astype(float).fillna(0.0)
+            if s.nunique() > 1:
+                out[c] = s.to_numpy()
+                kept.append(c)
+        return kept
+
+    a_kept = _add_numeric(a_cols)
+    d_kept = _add_numeric(d_feat + d_mech)
+    f_kept = _add_numeric(f_scalar)
+    # Delay-массивы → counts (число задержанных репортов), помечаем как F.
+    f_delay: list[str] = []
+    for c in delay_cols:
+        name = c.replace("_array", "_count")
+        out[name] = df[c].map(
+            lambda v: float(len(v)) if isinstance(v, (list, np.ndarray)) else 0.0
+        ).to_numpy()
+        if out[name].nunique() > 1:
+            f_delay.append(name)
+        else:
+            out.drop(columns=[name], inplace=True)
+
+    registry: dict[str, str] = {}
+    for c in a_kept:
+        registry[c] = "A_pre_treatment"
+    for c in d_kept:
+        registry[c] = "D_dag_required"
+    for c in f_kept + f_delay:
+        registry[c] = "F_leakage"
+
+    bds = BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment", target_col="target",
+        feature_registry=registry,
+    )
+    return ResearchDataset(
+        benchmark=bds, dataset_type=DATASET_TYPE_EVENT_LOG,
+        anchor="ad display/request (day_int-партиция; в stream-сэмпле day_int отсутствует)",
+        time_cutoff="A: ctx/browser известны в момент запроса показа; "
+                    "F: outcome-репорты приходят после показа (delayed reports)",
+        feature_rationale={
+            "features_ctx_*/features_browser_*": "A: контекст/браузер до показа",
+            "features_kv_*constrained_*/campaign_id/publisher_id": "D: privacy/logging-механика",
+            "is_*/nb_sales/*_delay_*_count": "F: производные исхода (delayed reports/leakage)",
+        },
+        notes=("Логи показов рекламы, нет treatment/control. treatment бинаризован как демо "
+               "(display_order==1 = топ-показ); target=" + target + ". Не A/B, safe B/C недоступны."),
+    )
+
+
+__all__ = [
+    "ResearchDataset",
+    "EXPANDED_DATA_DIR",
+    "load_lenta_benchmark_dataset",
+    "load_orange_belgium_benchmark_dataset",
+    "load_lazada_descn_benchmark_dataset",
+    "load_x5_a_only_benchmark_dataset",
+    "load_criteo_percent10_benchmark_dataset",
+    "load_open_bandit_research_dataset",
+    "load_completejourney_research_dataset",
+    "load_criteo_private_ad_research_dataset",
+]

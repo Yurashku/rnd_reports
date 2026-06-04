@@ -117,8 +117,10 @@ Lazada/DESCN (рандомизированный test), Criteo (слабый A-o
   относительные delta-эффекты B/C по-прежнему подтверждены **только на синтетике** (таблица выше).
 - **Не вошли в delta-таблицу:** `criteo` — источник отдаёт HTTP 403 (access_blocked);
   `open_bandit` — пакет `obp` несовместим с pandas 2.x (`DataFrame.drop("col", 1)`),
-  runtime-blocked sandbox; `dunnhumby` / `criteo_private_ad` — требуют локально распакованных
-  registration-gated данных и как safe B/C не используются (адаптеры бросают понятную ошибку).
+  runtime-blocked sandbox; `dunnhumby` / `criteo_private_ad` — адаптеры реализованы
+  (`research_sandbox`/`event_log_sandbox`, demo-only) и строят анкер-based ResearchDataset из
+  локальных данных, но это observational/ad-логи (не RCT) → в реальную A-only delta-таблицу не
+  входят и как safe B/C не используются.
 
 ## Рекомендация по переносу в HypEx
 Подход показывает устойчивый прирост на синтетике и сопоставим с HypEx CUPAC; на реальных

@@ -396,42 +396,277 @@ def load_open_bandit_research_dataset(
     )
 
 
-def load_completejourney_research_dataset(data_dir: Optional[str] = None) -> ResearchDataset:
+def _agg_purchases(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """Househld-агрегаты покупок за окно: spend / баскеты / юниты / товары."""
+    g = frame.groupby("household_id")
+    return pd.DataFrame({
+        f"{prefix}_spend": g["sales_value"].sum(),
+        f"{prefix}_n_baskets": g["basket_id"].nunique(),
+        f"{prefix}_n_units": g["quantity"].sum(),
+        f"{prefix}_n_products": g["product_id"].nunique(),
+    })
+
+
+def load_completejourney_research_dataset(
+    data_dir: Optional[str] = None,
+    anchor_campaign_id: Optional[int] = None,
+    cutoff_days: int = 7,
+    horizon_days: int = 30,
+    min_pre_days: int = 60,
+) -> ResearchDataset:
     """dunnhumby Complete Journey → ``ResearchDataset`` (retail journey, observational).
 
-    НЕ рандомизированный A/B (coupon не назначается случайно). Мульти-таблица с реальными
-    датами: transactions/campaigns/coupons/coupon_redempt. Разметка-подсказка относительно
-    анкера «дата первого контакта кампании»: пред-анкерная история покупок = **A**;
-    in-window активность до cutoff исхода = sandbox **C**; кампании/купоны/контакты =
-    **D/E**; пост-анкерные покупки/redemption = **E/F**.
+    НЕ рандомизированный A/B (кампании таргетируются, не назначаются случайно) — это
+    **observational sandbox для исследования C/D-механики, не доказательство** safe in-time.
 
-    Чтение требует локально распакованных CSV (data/.../dunnhumby/). При отсутствии —
-    понятная ошибка; полноценный observational-контракт строить не следует (demo-only).
+    Контракт строится вокруг анкера = ``start_date`` выбранной кампании
+    (``campaign_descriptions``). По умолчанию берётся кампания максимального охвата, чьё окно
+    ``[start, start+horizon_days]`` помещается в диапазон транзакций и оставляет
+    ``>= min_pre_days`` пред-истории. Househld-уровень, разметка относительно анкера:
+
+    - **A** (pre-treatment, ``tx < anchor_start``): pre-покупки (spend/баскеты/юниты/товары,
+      coupon_disc) + статичная демография (one-hot);
+    - **C-sandbox** (``[anchor_start, anchor_start+cutoff_days)``): ранняя in-window активность
+      строго **до** окна исхода — *сконструированный* C-кандидат, не реальная B/C-валидация;
+    - **D** (механика): число кампаний, полученных до анкера (таргетинг/политика);
+    - **E** (пост-treatment): redemptions внутри окна исхода;
+    - **target**: spend в ``[anchor_start+cutoff_days, anchor_start+horizon_days)`` (строго
+      после C-окна, чтобы C не пересекался с исходом);
+    - **treatment** (демо, observational): домохозяйство получило анкер-кампанию.
+
+    Требует локальных CSV (``transactions.csv``, ``campaign_descriptions.csv``,
+    ``campaigns.csv``; опционально ``demographics.csv``, ``coupon_redemptions.csv``) —
+    см. сборку в data/06_safe_intime_cupac/dunnhumby/. При отсутствии — понятная ошибка.
     """
     root = Path(data_dir) if data_dir else EXPANDED_DATA_DIR / "dunnhumby"
-    trans = _require_file(
-        root / "transaction_data.csv", "dunnhumby",
-        "dunnhumby Complete Journey (registration-gated) или community-зеркало → dunnhumby/.",
+    hint = ("dunnhumby Complete Journey: соберите CSV через R-пакет completejourney "
+            "(или конвертацией .rds/.rda) в dunnhumby/.")
+    tx_path = _require_file(root / "transactions.csv", "dunnhumby", hint)
+    cd_path = _require_file(root / "campaign_descriptions.csv", "dunnhumby", hint)
+    cmp_path = _require_file(root / "campaigns.csv", "dunnhumby", hint)
+
+    cdesc = pd.read_csv(cd_path, parse_dates=["start_date", "end_date"])
+    campaigns = pd.read_csv(cmp_path)
+    tx = pd.read_csv(
+        tx_path, parse_dates=["transaction_timestamp"],
+        usecols=["household_id", "basket_id", "product_id", "quantity",
+                 "sales_value", "coupon_disc", "transaction_timestamp"],
     )
-    raise NotImplementedError(
-        "Complete Journey — observational sandbox: контракт строится только при наличии "
-        f"распакованных таблиц рядом с {trans} и защитимого анкер-определения; "
-        "как RCT не используется (см. docs/06_expanded_dataset_scouting.md)."
+    tmin, tmax = tx["transaction_timestamp"].min(), tx["transaction_timestamp"].max()
+
+    # Выбор анкер-кампании: max охват среди помещающихся в диапазон с pre-историей.
+    reach = campaigns.groupby("campaign_id")["household_id"].nunique()
+    cdesc = cdesc.assign(n_hh=cdesc["campaign_id"].map(reach).fillna(0).astype(int))
+    if anchor_campaign_id is None:
+        fits = cdesc[
+            (cdesc["start_date"] - tmin >= pd.Timedelta(days=min_pre_days))
+            & (cdesc["start_date"] + pd.Timedelta(days=horizon_days) <= tmax)
+        ]
+        if fits.empty:
+            raise ValueError(
+                "dunnhumby: ни одна кампания не оставляет достаточного pre/post-окна; "
+                "ослабьте min_pre_days/horizon_days или задайте anchor_campaign_id."
+            )
+        anchor_campaign_id = int(fits.sort_values("n_hh", ascending=False)["campaign_id"].iloc[0])
+    arow = cdesc.loc[cdesc["campaign_id"] == anchor_campaign_id]
+    if arow.empty:
+        raise ValueError(f"dunnhumby: campaign_id={anchor_campaign_id} нет в campaign_descriptions.")
+    anchor_start = arow["start_date"].iloc[0]
+    cwin_end = anchor_start + pd.Timedelta(days=cutoff_days)
+    horizon_end = anchor_start + pd.Timedelta(days=horizon_days)
+
+    # Население: все домохозяйства из транзакций; treatment = получили анкер-кампанию.
+    out = pd.DataFrame({"household_id": np.sort(tx["household_id"].unique())})
+    treated = set(campaigns.loc[campaigns["campaign_id"] == anchor_campaign_id, "household_id"])
+    out["treatment"] = out["household_id"].isin(treated).astype(int)
+
+    ts = tx["transaction_timestamp"]
+    pre = tx[ts < anchor_start]
+    cwin = tx[(ts >= anchor_start) & (ts < cwin_end)]
+    post = tx[(ts >= cwin_end) & (ts < horizon_end)]
+
+    a_pre = _agg_purchases(pre, "pre")
+    a_pre["pre_coupon_disc"] = pre.groupby("household_id")["coupon_disc"].sum()
+    c_win = _agg_purchases(cwin, "cwin")[["cwin_spend", "cwin_n_baskets", "cwin_n_units"]]
+    target = post.groupby("household_id")["sales_value"].sum().rename("target")
+
+    out = (out.merge(a_pre, on="household_id", how="left")
+              .merge(c_win, on="household_id", how="left")
+              .merge(target, on="household_id", how="left"))
+
+    # D: число кампаний, полученных строго до анкера (интенсивность таргетинга).
+    cmp_dated = campaigns.merge(cdesc[["campaign_id", "start_date"]], on="campaign_id", how="left")
+    prior = (cmp_dated[cmp_dated["start_date"] < anchor_start]
+             .groupby("household_id")["campaign_id"].nunique().rename("n_prior_campaigns"))
+    out = out.merge(prior, on="household_id", how="left")
+
+    # E: redemptions внутри окна исхода (пост-treatment downstream).
+    redempt_path = root / "coupon_redemptions.csv"
+    if redempt_path.exists():
+        red = pd.read_csv(redempt_path, parse_dates=["redemption_date"])
+        rin = red[(red["redemption_date"] >= anchor_start) & (red["redemption_date"] < horizon_end)]
+        out = out.merge(
+            rin.groupby("household_id").size().rename("redemptions_in_window"),
+            on="household_id", how="left",
+        )
+    else:
+        out["redemptions_in_window"] = 0
+
+    # A-демография (one-hot статичных категорий), если доступна.
+    demo_oh: list[str] = []
+    demo_path = root / "demographics.csv"
+    if demo_path.exists():
+        demo = pd.read_csv(demo_path)
+        cat_cols = [c for c in demo.columns if c != "household_id"]
+        out = out.merge(demo, on="household_id", how="left")
+        out, demo_oh = _one_hot(out, cat_cols)
+
+    a_num = ["pre_spend", "pre_n_baskets", "pre_n_units", "pre_n_products", "pre_coupon_disc"]
+    c_num = ["cwin_spend", "cwin_n_baskets", "cwin_n_units"]
+    d_num = ["n_prior_campaigns"]
+    e_num = ["redemptions_in_window"]
+    out = _numeric_no_nan(out, a_num + c_num + d_num + e_num)
+    out["target"] = pd.to_numeric(out["target"], errors="coerce").astype(float).fillna(0.0)
+    out["id"] = out["household_id"].astype(int)
+
+    registry: dict[str, str] = {}
+    for c in a_num + demo_oh:
+        registry[c] = "A_pre_treatment"
+    for c in c_num:
+        registry[c] = "C_balance_gated_intime"
+    for c in d_num:
+        registry[c] = "D_dag_required"
+    for c in e_num:
+        registry[c] = "E_mediator_risk"
+
+    bds = BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment", target_col="target",
+        feature_registry=registry,
+    )
+    return ResearchDataset(
+        benchmark=bds, dataset_type=DATASET_TYPE_RESEARCH,
+        anchor=f"campaign {anchor_campaign_id} start_date={anchor_start.date()} "
+               f"(reach={len(treated)} hh)",
+        time_cutoff=(
+            f"A: tx<{anchor_start.date()}; C-window: [start, start+{cutoff_days}d); "
+            f"target: spend в [start+{cutoff_days}d, start+{horizon_days}d)"
+        ),
+        feature_rationale={
+            "pre_*/demographics": "A: пред-анкерная история покупок и статичная демография",
+            "cwin_*": "C-sandbox: ранняя in-window активность строго до окна исхода (constructed)",
+            "n_prior_campaigns": "D: интенсивность таргетинга кампаниями (нужен DAG)",
+            "redemptions_in_window": "E: redemptions внутри окна исхода (пост-treatment)",
+        },
+        notes=("Observational (кампания не рандомизирована) — demo-only песочница для C/D, "
+               "НЕ реальная safe in-time валидация. treatment = получение анкер-кампании."),
     )
 
 
-def load_criteo_private_ad_research_dataset(data_dir: Optional[str] = None) -> ResearchDataset:
-    """CriteoPrivateAd → ``ResearchDataset`` (advertising logs, privacy-конструкция).
+def load_criteo_private_ad_research_dataset(
+    data_dir: Optional[str] = None,
+    sample_file: str = "sample_10k.parquet",
+    target: str = "is_clicked",
+) -> ResearchDataset:
+    """CriteoPrivateAd → ``ResearchDataset`` (advertising logs, D/F-песочница).
 
-    НЕ классический treatment/control. Подсказка: pre-display контекст/request = **A**;
-    display/order/campaign/privacy-механика = **D**; delayed click/sale/report-производные
-    = **F/leakage**; защитимый in-time C — только при очень аккуратном анкере (обычно нет).
-    Требует HF ``datasets`` и локально скачанный parquet (многогигабайтный).
+    НЕ классический treatment/control — это логи показов рекламы. Строится event-log
+    sandbox по локальному parquet-сэмплу (схема 150 колонок):
+
+    - **A** (pre-display контекст): ``features_ctx_not_constrained_*``,
+      ``features_browser_bits_constrained_*`` — известны в момент запроса показа;
+    - **D** (механика/приватность): ``features_kv_*constrained_*`` (privacy-бакеты),
+      ``campaign_id``, ``publisher_id``;
+    - **F** (outcome-derived): ``is_visit`` / ``is_click_landed`` / ``nb_sales`` и
+      ``*_delay_after_display_array`` (delayed-report конструкции) → counts;
+    - **target**: ``target`` (по умолчанию ``is_clicked``);
+    - **treatment** (демо): топ-показ ``display_order == 1`` — бинаризация ради песочницы,
+      **не** рандомизированное лечение.
+
+    Колонки ``features_not_available_*`` (плейсхолдеры) и константы исключаются.
+    Требует локального parquet (см. сборку sample_10k через HF ``datasets`` в
+    data/06_safe_intime_cupac/criteo_private_ad/). При отсутствии — понятная ошибка.
     """
     root = Path(data_dir) if data_dir else EXPANDED_DATA_DIR / "criteo_private_ad"
-    raise NotImplementedError(
-        "CriteoPrivateAd — advertising-песочница (D/F): прямого A/B-контракта нет. "
-        f"Нужен локальный parquet в {root} и аккуратный анкер; как safe B/C не используется."
+    path = _require_file(
+        root / sample_file, "criteo_private_ad",
+        "CriteoPrivateAd: сохраните stream-сэмпл (HF datasets) как sample_10k.parquet.",
+    )
+    df = pd.read_parquet(path)
+    if target not in df.columns:
+        raise ValueError(
+            f"criteo_private_ad: target='{target}' нет в данных; доступны метки исхода "
+            "is_clicked/is_visit/is_click_landed."
+        )
+    if "display_order" not in df.columns:
+        raise ValueError("criteo_private_ad: ожидается колонка display_order для демо-treatment.")
+
+    a_cols = [c for c in df.columns
+              if c.startswith(("features_ctx_not_constrained",
+                               "features_browser_bits_constrained"))]
+    d_feat = [c for c in df.columns
+              if c.startswith(("features_kv_bits_constrained", "features_kv_not_constrained"))]
+    d_mech = [c for c in ("campaign_id", "publisher_id") if c in df.columns]
+    f_scalar = [c for c in ("is_visit", "is_click_landed", "nb_sales") if c in df.columns]
+    delay_cols = [c for c in df.columns if c.endswith("_delay_after_display_array")]
+
+    out = pd.DataFrame()
+    out["id"] = np.arange(len(df))
+    if "user_id" in df.columns:
+        out["user_id"] = df["user_id"].to_numpy()
+    out["target"] = pd.to_numeric(df[target], errors="coerce").fillna(0.0).astype(float)
+    out["treatment"] = (
+        pd.to_numeric(df["display_order"], errors="coerce") == 1
+    ).astype(int)
+
+    def _add_numeric(cols: list[str]) -> list[str]:
+        """Числовая коррекция + отбрасывание констант/нечисловых пустых колонок."""
+        kept: list[str] = []
+        for c in cols:
+            s = pd.to_numeric(df[c], errors="coerce").astype(float).fillna(0.0)
+            if s.nunique() > 1:
+                out[c] = s.to_numpy()
+                kept.append(c)
+        return kept
+
+    a_kept = _add_numeric(a_cols)
+    d_kept = _add_numeric(d_feat + d_mech)
+    f_kept = _add_numeric(f_scalar)
+    # Delay-массивы → counts (число задержанных репортов), помечаем как F.
+    f_delay: list[str] = []
+    for c in delay_cols:
+        name = c.replace("_array", "_count")
+        out[name] = df[c].map(
+            lambda v: float(len(v)) if isinstance(v, (list, np.ndarray)) else 0.0
+        ).to_numpy()
+        if out[name].nunique() > 1:
+            f_delay.append(name)
+        else:
+            out.drop(columns=[name], inplace=True)
+
+    registry: dict[str, str] = {}
+    for c in a_kept:
+        registry[c] = "A_pre_treatment"
+    for c in d_kept:
+        registry[c] = "D_dag_required"
+    for c in f_kept + f_delay:
+        registry[c] = "F_leakage"
+
+    bds = BenchmarkDataset(
+        data=out, id_col="id", treatment_col="treatment", target_col="target",
+        feature_registry=registry,
+    )
+    return ResearchDataset(
+        benchmark=bds, dataset_type=DATASET_TYPE_EVENT_LOG,
+        anchor="ad display/request (day_int-партиция; в stream-сэмпле day_int отсутствует)",
+        time_cutoff="A: ctx/browser известны в момент запроса показа; "
+                    "F: outcome-репорты приходят после показа (delayed reports)",
+        feature_rationale={
+            "features_ctx_*/features_browser_*": "A: контекст/браузер до показа",
+            "features_kv_*constrained_*/campaign_id/publisher_id": "D: privacy/logging-механика",
+            "is_*/nb_sales/*_delay_*_count": "F: производные исхода (delayed reports/leakage)",
+        },
+        notes=("Логи показов рекламы, нет treatment/control. treatment бинаризован как демо "
+               "(display_order==1 = топ-показ); target=" + target + ". Не A/B, safe B/C недоступны."),
     )
 
 

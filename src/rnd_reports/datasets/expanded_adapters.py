@@ -267,38 +267,69 @@ def load_x5_a_only_benchmark_dataset(
     )
 
 
+def _criteo_targets(bunch_target) -> dict[str, np.ndarray]:
+    """Извлечь все доступные Criteo-исходы из ``Bunch.target`` (multi-target-safe).
+
+    ``fetch_criteo`` может вернуть таргет как DataFrame (``target_col='all'`` → ``visit`` +
+    ``conversion``), как named Series, или как ndarray (один исход). Возвращаем
+    ``{имя_исхода: значения}`` без молчаливой потери второго исхода.
+    """
+    if hasattr(bunch_target, "columns"):  # DataFrame: несколько исходов
+        return {str(c): bunch_target[c].to_numpy() for c in bunch_target.columns}
+    if hasattr(bunch_target, "name") and bunch_target.name:  # named Series
+        return {str(bunch_target.name): np.asarray(bunch_target).ravel()}
+    return {"visit": np.asarray(bunch_target).ravel()}  # ndarray → дефолтный visit
+
+
 def load_criteo_percent10_benchmark_dataset(
     data_home: Optional[str] = None,
+    target: str = "visit",
 ) -> BenchmarkDataset:
     """Criteo Uplift v2.1 (10%) → ``BenchmarkDataset`` (слабый A-only; exposure → E/unsafe).
 
-    treatment = ``treatment``; target = ``visit``; ``f0..f11`` анонимны → класс **A**.
-    ``exposure`` (RTB-показ, post-treatment) размечается как **E_mediator_risk** и в
-    основной estimator не идёт. Требует локального sklift-кэша/сети. См. raw audit §3.
+    treatment = ``treatment``; основной исход — ``target`` (``visit`` по умолчанию, либо
+    ``conversion``); ``f0..f11`` анонимны → класс **A**. Мульти-таргет: при наличии второго
+    исхода он регистрируется как **F_leakage** (outcome-derived, исключён из estimator), а не
+    выдаётся за признак. ``exposure`` (RTB-показ, post-treatment) → **E_mediator_risk**.
+    Требует локального sklift-кэша/сети. См. raw audit §3.
     """
     from sklift.datasets import fetch_criteo
 
     home = str(data_home) if data_home else str(EXPANDED_DATA_DIR)
-    b = fetch_criteo(percent10=True, data_home=home)
+    # target_col='all' → получаем все исходы; падаем обратно на дефолт при старом sklift.
+    try:
+        b = fetch_criteo(percent10=True, data_home=home, target_col="all")
+    except (TypeError, ValueError):
+        b = fetch_criteo(percent10=True, data_home=home)
+
     df = b.data.copy()
     tname = b.treatment_name if isinstance(b.treatment_name, str) else "treatment"
-    df[tname] = b.treatment.values
-    # target: предпочитаем visit (если несколько таргетов — берём первый/visit)
-    targets = b.target if hasattr(b.target, "columns") else None
-    if targets is not None and "visit" in getattr(b.target, "columns", []):
-        df["visit"] = b.target["visit"].values
-    else:
-        df["visit"] = np.asarray(b.target).ravel()[: len(df)]
+    df[tname] = np.asarray(b.treatment).ravel()[: len(df)]
+
+    outcomes = _criteo_targets(b.target)
+    if target not in outcomes:
+        raise ValueError(
+            f"Criteo: запрошен target='{target}', доступны {sorted(outcomes)}. "
+            "Используйте 'visit' или 'conversion'."
+        )
 
     out = pd.DataFrame()
     out["id"] = np.arange(len(df))
     out["treatment"] = pd.to_numeric(df[tname], errors="coerce").astype(int)
-    out["target"] = pd.to_numeric(df["visit"], errors="coerce").astype(float)
+    out["target"] = pd.to_numeric(pd.Series(outcomes[target][: len(df)]),
+                                  errors="coerce").astype(float)
 
     f_cols = [c for c in df.columns if c.startswith("f") and c[1:].isdigit()]
     out = _numeric_no_nan(pd.concat([out, df[f_cols]], axis=1), f_cols)
 
     registry = {c: "A_pre_treatment" for c in f_cols}
+    # Второй исход (если есть) — outcome-derived → F_leakage, явно вне estimator.
+    for name, values in outcomes.items():
+        if name == target:
+            continue
+        out[name] = pd.to_numeric(pd.Series(values[: len(df)]),
+                                  errors="coerce").astype(float)
+        registry[name] = "F_leakage"
     if "exposure" in df.columns:
         out["exposure"] = pd.to_numeric(df["exposure"], errors="coerce").astype(float)
         registry["exposure"] = "E_mediator_risk"  # post-treatment, unsafe_demo

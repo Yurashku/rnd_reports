@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -116,6 +117,18 @@ def test_delta_csv_has_required_columns_if_present() -> None:
         pytest.skip("delta CSV ещё не сгенерирован")
     df = pd.read_csv(csv)
     assert list(df.columns) == _DELTA_COLUMNS
+
+
+def test_criteo_targets_multi_target_safe() -> None:
+    # DataFrame с двумя исходами → оба извлекаются (без молчаливой потери conversion).
+    multi = pd.DataFrame({"visit": [0, 1, 1], "conversion": [0, 0, 1]})
+    got = ea._criteo_targets(multi)
+    assert set(got) == {"visit", "conversion"}
+    assert list(got["conversion"]) == [0, 0, 1]
+    # named Series → используется её имя.
+    assert set(ea._criteo_targets(pd.Series([0, 1], name="conversion"))) == {"conversion"}
+    # «голый» ndarray → дефолтный visit.
+    assert set(ea._criteo_targets(np.array([0, 1, 0]))) == {"visit"}
 
 
 def test_no_raw_data_tracked_by_git() -> None:

@@ -183,13 +183,233 @@ LOADERS = {
 }
 
 
+# --- delta-эффект: реальные бенчмарки на адаптированных датасетах ------------
+
+# Итоговые колонки сводки delta-эффектов (см. задание Step 4).
+DELTA_COLUMNS = [
+    "dataset", "validation_level", "method", "predecessor_method", "n", "target",
+    "treatment_col", "ate", "se", "ci_low", "ci_high", "adjusted_target_variance",
+    "variance_reduction_vs_ab_pct", "sample_size_reduction_vs_ab_pct",
+    "variance_reduction_vs_cupac_A_pct", "sample_size_reduction_vs_cupac_A_pct",
+    "incremental_variance_reduction_vs_predecessor_pct",
+    "incremental_sample_size_reduction_vs_predecessor_pct",
+    "feature_groups_used", "n_features_used", "safety_status", "diagnostic_notes",
+]
+
+RND_DIR = ROOT / "rnd" / "06_safe_intime_cupac"
+DELTA_CSV = RND_DIR / "expanded_dataset_delta_results.csv"
+FIGURES_DIR = RND_DIR / "figures"
+
+# Какой максимально-валидный набор методов гонять на каждом датасете.
+_A_ONLY_METHODS = ["ab_hypex", "sklearn_cupac_A"]
+
+
+def _delta_specs() -> dict:
+    """Спецификации delta-прогона: loader + тип + уровень валидации + методы.
+
+    Все loader-ы ленивы (читают из gitignored data/); недоступные датасеты
+    пропускаются с записью причины. C/D-«песочницы» помечаются явно и НЕ выдаются
+    за реальную A+B+C-валидацию.
+    """
+    from rnd_reports.datasets import expanded_adapters as ea
+
+    def _hillstrom():
+        from rnd_reports.datasets.adapters import load_benchmark_dataset
+
+        return load_benchmark_dataset("hillstrom")
+
+    return {
+        "hillstrom": dict(load=_hillstrom, dataset_type="real",
+                          validation_level="A_only_real", methods=_A_ONLY_METHODS),
+        "lenta": dict(load=ea.load_lenta_benchmark_dataset, dataset_type="real",
+                      validation_level="A_only_real", methods=_A_ONLY_METHODS),
+        "orange_belgium": dict(load=ea.load_orange_belgium_benchmark_dataset,
+                               dataset_type="real", validation_level="A_only_real",
+                               methods=_A_ONLY_METHODS),
+        "lazada_descn": dict(load=ea.load_lazada_descn_benchmark_dataset,
+                             dataset_type="real", validation_level="A_only_real",
+                             methods=_A_ONLY_METHODS),
+        "x5_retailhero": dict(load=ea.load_x5_a_only_benchmark_dataset,
+                              dataset_type="real", validation_level="A_only_real",
+                              methods=_A_ONLY_METHODS),
+        "criteo": dict(load=ea.load_criteo_percent10_benchmark_dataset,
+                       dataset_type="real", validation_level="A_only_real",
+                       methods=_A_ONLY_METHODS),
+        "open_bandit": dict(
+            load=lambda: ea.load_open_bandit_research_dataset().benchmark,
+            dataset_type="research_sandbox", validation_level="D_F_sandbox",
+            methods=_A_ONLY_METHODS),
+    }
+
+
+def _result_rows(results, dataset, validation_level, treatment_col):
+    rows = []
+    for r in results:
+        rows.append({
+            "dataset": dataset,
+            "validation_level": validation_level,
+            "method": r.method,
+            "predecessor_method": r.predecessor_method,
+            "n": r.n,
+            "target": r.target,
+            "treatment_col": treatment_col,
+            "ate": r.ate,
+            "se": r.se,
+            "ci_low": r.ci_low,
+            "ci_high": r.ci_high,
+            "adjusted_target_variance": r.adjusted_target_variance,
+            "variance_reduction_vs_ab_pct": r.variance_reduction_vs_ab_pct,
+            "sample_size_reduction_vs_ab_pct": r.sample_size_reduction_vs_ab_pct,
+            "variance_reduction_vs_cupac_A_pct": r.variance_reduction_vs_sklearn_cupac_pct,
+            "sample_size_reduction_vs_cupac_A_pct": r.sample_size_reduction_vs_sklearn_cupac_pct,
+            "incremental_variance_reduction_vs_predecessor_pct":
+                r.incremental_variance_reduction_vs_predecessor_pct,
+            "incremental_sample_size_reduction_vs_predecessor_pct":
+                r.incremental_sample_size_reduction_vs_predecessor_pct,
+            "feature_groups_used": "+".join(r.feature_groups_used) or "—",
+            "n_features_used": r.n_features_used,
+            "safety_status": r.safety_status,
+            "diagnostic_notes": r.diagnostic_notes,
+        })
+    return rows
+
+
+def run_delta_effects(datasets=None, random_state: int = 11) -> "pd.DataFrame":
+    """Прогнать delta-эффект бенчмарки на адаптированных датасетах и записать CSV."""
+    from rnd_reports.benchmark.protocol import run_benchmark
+
+    specs = _delta_specs()
+    names = datasets or list(specs)
+    all_rows: list[dict] = []
+    skipped: dict[str, str] = {}
+    for name in names:
+        spec = specs.get(name)
+        if spec is None:
+            skipped[name] = "нет delta-спецификации"
+            continue
+        _print_header(f"DELTA: {name}")
+        try:
+            bds = spec["load"]()
+            results = run_benchmark(
+                bds, methods=spec["methods"], dataset_name=name,
+                dataset_type=spec["dataset_type"], random_state=random_state,
+            )
+            all_rows.extend(_result_rows(
+                results, name, spec["validation_level"], bds.treatment_col))
+            for r in results:
+                print(f"  {r.method:32s} ate={r.ate:.4f} "
+                      f"vr_vs_ab={r.variance_reduction_vs_ab_pct}")
+            # Инкрементальная запись: партиал-результаты переживают сбой позднего датасета.
+            RND_DIR.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(all_rows, columns=DELTA_COLUMNS).round(6).to_csv(
+                DELTA_CSV, index=False)
+        except Exception as exc:  # noqa: BLE001 — пропускаем недоступные датасеты
+            skipped[name] = f"{type(exc).__name__}: {exc}"
+            print(f"[SKIP] {name}: {type(exc).__name__}: {exc}")
+
+    df = pd.DataFrame(all_rows, columns=DELTA_COLUMNS)
+    RND_DIR.mkdir(parents=True, exist_ok=True)
+    df.round(6).to_csv(DELTA_CSV, index=False)
+    print(f"\n[written] {DELTA_CSV}  ({len(df)} rows)")
+    if skipped:
+        _print_header("DELTA SKIPPED")
+        for k, v in skipped.items():
+            print(f"  {k}: {v}")
+    return df
+
+
+# --- coverage-карта представительности классов признаков по датасетам --------
+# Ручная сводка (см. docs/06_expanded_dataset_scouting.md): 1 = есть/кандидат, 0 = нет.
+FEATURE_COVERAGE = {
+    #              A  B  C  D  EF
+    "hillstrom":  [1, 0, 0, 0, 1],
+    "lenta":      [1, 0, 0, 0, 0],
+    "x5":         [1, 0, 0, 0, 1],
+    "criteo":     [1, 0, 0, 1, 1],
+    "megafon":    [1, 0, 0, 0, 0],
+    "orange":     [1, 0, 0, 0, 0],
+    "lazada":     [1, 0, 0, 1, 0],
+    "open_bandit":[1, 0, 0, 1, 1],
+    "dunnhumby":  [1, 0, 0, 1, 1],
+    "criteo_priv":[1, 0, 0, 1, 1],
+}
+
+
+def make_figures(df=None) -> None:
+    """Компактные PNG: ATE±CI, снижение дисперсии, coverage-heatmap классов."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    if df is None and DELTA_CSV.exists():
+        df = pd.read_csv(DELTA_CSV)
+
+    if df is not None and len(df):
+        # (a) ATE±CI по методам, фасет по датасету.
+        for ds, sub in df.groupby("dataset"):
+            fig, ax = plt.subplots(figsize=(5, 2.6))
+            y = np.arange(len(sub))
+            ax.errorbar(sub["ate"], y,
+                        xerr=[sub["ate"] - sub["ci_low"], sub["ci_high"] - sub["ate"]],
+                        fmt="o", capsize=3)
+            ax.set_yticks(y)
+            ax.set_yticklabels(sub["method"], fontsize=7)
+            ax.set_title(f"ATE ± 95% CI — {ds}", fontsize=9)
+            ax.axvline(0, color="grey", lw=0.6, ls="--")
+            fig.tight_layout()
+            fig.savefig(FIGURES_DIR / f"ate_ci_{ds}.png", dpi=90)
+            plt.close(fig)
+
+        # (b) снижение дисперсии vs A/B по методам и датасетам.
+        piv = df.pivot_table(index="dataset", columns="method",
+                             values="variance_reduction_vs_ab_pct", aggfunc="first")
+        fig, ax = plt.subplots(figsize=(6, 3))
+        piv.plot.bar(ax=ax)
+        ax.set_ylabel("variance reduction vs A/B, %", fontsize=8)
+        ax.set_title("Снижение дисперсии по методам", fontsize=9)
+        ax.legend(fontsize=6)
+        ax.tick_params(labelsize=7)
+        fig.tight_layout()
+        fig.savefig(FIGURES_DIR / "variance_reduction_by_method.png", dpi=90)
+        plt.close(fig)
+
+    # (c) coverage-heatmap классов признаков по датасетам.
+    classes = ["A", "B", "C", "D", "E/F"]
+    mat = np.array([FEATURE_COVERAGE[k] for k in FEATURE_COVERAGE], dtype=float)
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    ax.imshow(mat, cmap="Greens", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(classes)))
+    ax.set_xticklabels(classes, fontsize=8)
+    ax.set_yticks(range(len(FEATURE_COVERAGE)))
+    ax.set_yticklabels(list(FEATURE_COVERAGE), fontsize=7)
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            ax.text(j, i, "✓" if mat[i, j] else "·", ha="center", va="center",
+                    fontsize=8, color="black")
+    ax.set_title("Представительность классов A–F", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "feature_coverage_heatmap.png", dpi=90)
+    plt.close(fig)
+    print(f"[written] figures → {FIGURES_DIR}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="R&D-6 raw dataset audit")
     parser.add_argument("datasets", nargs="*", default=list(DATASETS))
     parser.add_argument(
         "--no-write", action="store_true", help="не писать .txt-сводки в data/"
     )
+    parser.add_argument(
+        "--delta", action="store_true",
+        help="прогнать delta-эффект бенчмарки + фигуры (вместо raw-аудита)",
+    )
     args = parser.parse_args()
+    if args.delta:
+        df = run_delta_effects(args.datasets or None)
+        make_figures(df)
+        return 0
     names = args.datasets or list(DATASETS)
     write = not args.no_write
 

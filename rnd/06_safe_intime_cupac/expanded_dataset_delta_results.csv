@@ -1,0 +1,11 @@
+dataset,validation_level,method,predecessor_method,n,target,treatment_col,ate,se,ci_low,ci_high,adjusted_target_variance,variance_reduction_vs_ab_pct,sample_size_reduction_vs_ab_pct,variance_reduction_vs_cupac_A_pct,sample_size_reduction_vs_cupac_A_pct,incremental_variance_reduction_vs_predecessor_pct,incremental_sample_size_reduction_vs_predecessor_pct,feature_groups_used,n_features_used,safety_status,diagnostic_notes
+hillstrom,A_only_real,ab_hypex,,64000,target,treatment,0.596796,0.112556,0.376185,0.817407,226.094772,0.0,0.0,-0.057656,-0.057656,,,—,0,ok,"hypex A/B parity: ate=0.5968, p=1.15e-07"
+hillstrom,A_only_real,sklearn_cupac_A,ab_hypex,64000,target,treatment,0.595344,0.11252,0.374804,0.815885,225.964491,0.057622,0.057622,0.0,0.0,0.057622,0.057622,A,18,ok,cupac best_model=Lasso
+orange_belgium,A_only_real,ab_hypex,,11896,target,treatment,-0.002753,0.00397,-0.010536,0.005029,0.033124,0.0,0.0,-6.446446,-6.446446,,,—,0,ok,"hypex A/B parity: ate=-0.0028, p=0.488"
+orange_belgium,A_only_real,sklearn_cupac_A,ab_hypex,11896,target,treatment,-0.000946,0.003853,-0.008501,0.006608,0.031118,6.056047,6.056047,0.0,0.0,6.056047,6.056047,A,336,ok,cupac best_model=Ridge
+lazada_descn,A_only_real,ab_hypex,,181669,target,treatment,0.00374,0.000864,0.002047,0.005432,0.033968,0.0,0.0,-5.714742,-5.714742,,,—,0,ok,"hypex A/B parity: ate=0.0037, p=1.49e-05"
+lazada_descn,A_only_real,sklearn_cupac_A,ab_hypex,181669,target,treatment,0.003659,0.00084,0.002013,0.005306,0.032131,5.405814,5.405814,0.0,0.0,5.405814,5.405814,A,83,ok,cupac best_model=Ridge
+lenta,A_only_real,ab_hypex,,687029,target,treatment,0.007547,0.000853,0.005875,0.009219,0.096529,0.0,0.0,-16.769292,-16.769292,,,—,0,ok,"hypex A/B parity: ate=0.0075, p=9.11e-19"
+lenta,A_only_real,sklearn_cupac_A,ab_hypex,687029,target,treatment,0.006421,0.000792,0.004869,0.007973,0.082666,14.361046,14.361046,0.0,0.0,14.361046,14.361046,A,196,ok,cupac best_model=Linear
+x5_retailhero,A_only_real,ab_hypex,,200039,target,treatment,0.033231,0.002169,0.028979,0.037483,0.235628,0.0,0.0,-19.194042,-19.194042,,,—,0,ok,"hypex A/B parity: ate=0.0332, p=6.18e-53"
+x5_retailhero,A_only_real,sklearn_cupac_A,ab_hypex,200039,target,treatment,0.032648,0.001987,0.028754,0.036542,0.197684,16.103189,16.103189,0.0,0.0,16.103189,16.103189,A,10,ok,cupac best_model=Ridge

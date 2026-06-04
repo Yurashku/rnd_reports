@@ -104,6 +104,39 @@ CANDIDATE_DATASETS: list[DatasetSpec] = [
         notes="E-commerce voucher uplift; f0..f82 анонимны. test=181669 (random), "
         "train=926669 (biased) → A-only на рандомизированном тесте; B/C нет.",
     ),
+    # --- C/D-«песочницы»: НЕ прямые A/B uplift-бенчмарки (expanded scouting) ---
+    DatasetSpec(
+        name="open_bandit",
+        kind=KIND_REAL,
+        is_randomized=None,  # logged bandit; random-policy лог, но не классический A/B
+        source_url="https://github.com/st-tech/zr-obp",
+        license="CC-BY 4.0 (ZOZO Open Bandit Dataset)",
+        download_hint="pip install obp (в .venv); obp.dataset.OpenBanditDataset(...).",
+        notes="Logged-bandit ZOZOTOWN: context=A, action/position/pscore=D (политика), "
+        "reward-производные=F. Sandbox для C/D, не реальная A+B+C-валидация.",
+    ),
+    DatasetSpec(
+        name="dunnhumby_complete_journey",
+        kind=KIND_REAL,
+        is_randomized=False,  # observational: купоны не назначаются случайно
+        source_url="https://www.dunnhumby.com/source-files/",
+        license="dunnhumby source files (registration)",
+        download_hint="Регистрация на dunnhumby.com или community-зеркало → "
+        "<DATA_DIR>/dunnhumby/ (transactions/campaigns/coupons/...).",
+        notes="Retail journey с реальными датами: pre-anchor история=A, in-window=C-конструкция, "
+        "кампании/купоны/контакты=D/E, post-anchor=E/F. Observational → demo-only, не RCT.",
+    ),
+    DatasetSpec(
+        name="criteo_private_ad",
+        kind=KIND_REAL,
+        is_randomized=False,  # advertising logs, не treatment/control
+        source_url="https://huggingface.co/datasets/criteo/CriteoPrivateAd",
+        license="CC-BY-NC-SA 4.0",
+        download_hint="pip install datasets (в .venv); HF parquet criteo/CriteoPrivateAd "
+        "(многогигабайтный) → <DATA_DIR>/criteo_private_ad/.",
+        notes="Anonymized advertising logs: pre-display контекст=A, display/order/privacy=D, "
+        "delayed click/sale/report=F/leakage. D/F-sandbox, прямого A/B-контракта нет.",
+    ),
 ]
 
 CATALOG: dict[str, DatasetSpec] = {d.name: d for d in CANDIDATE_DATASETS}

@@ -196,9 +196,12 @@ DELTA_COLUMNS = [
     "feature_groups_used", "n_features_used", "safety_status", "diagnostic_notes",
 ]
 
-RND_DIR = ROOT / "rnd" / "06_safe_intime_cupac"
-DELTA_CSV = RND_DIR / "expanded_dataset_delta_results.csv"
-FIGURES_DIR = RND_DIR / "figures"
+# Коммитимые артефакты RnD-6 живут в results/ (не в rnd/), чтобы rnd/0X оставался
+# однородным: notebook.ipynb + report.md + report.pdf + README.md. См. CLAUDE.md/README.md.
+RESULTS_DIR = ROOT / "results" / "06_safe_intime_cupac"
+DELTA_CSV = RESULTS_DIR / "expanded_dataset_delta_results.csv"
+SANDBOX_CSV = RESULTS_DIR / "sandbox_diagnostics.csv"
+FIGURES_DIR = RESULTS_DIR / "figures"
 
 # Какой максимально-валидный набор методов гонять на каждом датасете.
 _A_ONLY_METHODS = ["ab_hypex", "sklearn_cupac_A"]
@@ -238,6 +241,14 @@ def _delta_specs() -> dict:
         "open_bandit": dict(
             load=lambda: ea.load_open_bandit_research_dataset().benchmark,
             dataset_type="research_sandbox", validation_level="D_F_sandbox",
+            methods=_A_ONLY_METHODS),
+        "dunnhumby": dict(
+            load=lambda: ea.load_completejourney_research_dataset().benchmark,
+            dataset_type="research_sandbox", validation_level="C_D_sandbox",
+            methods=_A_ONLY_METHODS),
+        "criteo_private_ad": dict(
+            load=lambda: ea.load_criteo_private_ad_research_dataset().benchmark,
+            dataset_type="event_log_sandbox", validation_level="D_F_sandbox",
             methods=_A_ONLY_METHODS),
     }
 
@@ -300,7 +311,7 @@ def run_delta_effects(datasets=None, random_state: int = 11) -> "pd.DataFrame":
                 print(f"  {r.method:32s} ate={r.ate:.4f} "
                       f"vr_vs_ab={r.variance_reduction_vs_ab_pct}")
             # Инкрементальная запись: партиал-результаты переживают сбой позднего датасета.
-            RND_DIR.mkdir(parents=True, exist_ok=True)
+            RESULTS_DIR.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(all_rows, columns=DELTA_COLUMNS).round(6).to_csv(
                 DELTA_CSV, index=False)
         except Exception as exc:  # noqa: BLE001 — пропускаем недоступные датасеты
@@ -308,7 +319,7 @@ def run_delta_effects(datasets=None, random_state: int = 11) -> "pd.DataFrame":
             print(f"[SKIP] {name}: {type(exc).__name__}: {exc}")
 
     df = pd.DataFrame(all_rows, columns=DELTA_COLUMNS)
-    RND_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     df.round(6).to_csv(DELTA_CSV, index=False)
     print(f"\n[written] {DELTA_CSV}  ({len(df)} rows)")
     if skipped:
@@ -318,20 +329,131 @@ def run_delta_effects(datasets=None, random_state: int = 11) -> "pd.DataFrame":
     return df
 
 
+# --- sandbox-диагностика: balance gate по классам + unsafe/sandbox демо ------
+
+def _sandbox_delta_row(dataset, validation_level, method, predecessor, est,
+                       treatment_col, vr_ab, vr_vs_cupac_a, incr_vs_pred,
+                       feature_groups, n_feat, safety, notes) -> dict:
+    """Строка DELTA_COLUMNS для демо-метода песочницы (ручной расчёт)."""
+    return {
+        "dataset": dataset, "validation_level": validation_level, "method": method,
+        "predecessor_method": predecessor, "n": est["n"], "target": "target",
+        "treatment_col": treatment_col, "ate": est["ate"], "se": est["se"],
+        "ci_low": est["ci_low"], "ci_high": est["ci_high"],
+        "adjusted_target_variance": est["variance"],
+        "variance_reduction_vs_ab_pct": vr_ab, "sample_size_reduction_vs_ab_pct": vr_ab,
+        "variance_reduction_vs_cupac_A_pct": vr_vs_cupac_a,
+        "sample_size_reduction_vs_cupac_A_pct": vr_vs_cupac_a,
+        "incremental_variance_reduction_vs_predecessor_pct": incr_vs_pred,
+        "incremental_sample_size_reduction_vs_predecessor_pct": incr_vs_pred,
+        "feature_groups_used": "+".join(feature_groups) or "—",
+        "n_features_used": n_feat, "safety_status": safety, "diagnostic_notes": notes,
+    }
+
+
+# Песочницы для диагностики: класс для unsafe/sandbox-демо поверх A.
+_SANDBOX_DIAG = {
+    "dunnhumby": dict(validation_level="C_D_sandbox", demo_class="C",
+                      load=lambda ea: ea.load_completejourney_research_dataset().benchmark),
+    "criteo_private_ad": dict(validation_level="D_F_sandbox", demo_class="F",
+                              load=lambda ea: ea.load_criteo_private_ad_research_dataset().benchmark),
+}
+
+
+def run_sandbox_diagnostics(random_state: int = 11):
+    """Balance-gate диагностика по классам + unsafe/sandbox-демо для песочниц.
+
+    Возвращает ``(diag_df, extra_delta_rows)`` и пишет ``SANDBOX_CSV``. Песочницы —
+    observational / ad-логи: НЕ реальная safe-валидация. Демо показывает риск:
+    в dunnhumby даже A несбалансирован (конфаундинг), а добавление F-утечки в criteo
+    выдаёт «лишнюю эффективность» и смещает ATE.
+    """
+    import numpy as np
+    from rnd_reports.datasets import expanded_adapters as ea
+    from rnd_reports.feature_safety.contracts import FeatureClass
+    from rnd_reports.feature_safety.diagnostics import diagnose
+    from rnd_reports.variance_reduction.local_cupac import local_cupac_adjust
+    from rnd_reports.benchmark.protocol import estimate_ate
+
+    diag_rows: list[dict] = []
+    extra_rows: list[dict] = []
+    for name, spec in _SANDBOX_DIAG.items():
+        _print_header(f"SANDBOX DIAG: {name}")
+        try:
+            bds = spec["load"](ea)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[SKIP diag] {name}: {type(exc).__name__}: {exc}")
+            continue
+        data, tcol, ycol = bds.data, bds.treatment_col, bds.target_col
+
+        # (1) balance gate по классам признаков (демонстрирует конфаундинг/риск).
+        d = diagnose(data, tcol, bds.feature_registry)
+        for fc, sub in d.groupby("feature_class"):
+            diag_rows.append({
+                "dataset": name, "feature_class": fc, "n_features": int(len(sub)),
+                "gate_pass_rate": round(float(sub["gate_pass"].mean()), 4),
+                "abs_smd_max": round(float(sub["smd"].abs().max()), 4),
+                "policy_status": str(sub["policy_status"].iloc[0]),
+            })
+            print(f"  {fc:28s} n={len(sub):>3d} gate_pass={sub['gate_pass'].mean():.2f} "
+                  f"|SMD|max={sub['smd'].abs().max():.3f}")
+
+        # (2) unsafe/sandbox-демо: A-only vs A+<demo-class> поверх CUPAC.
+        reg = bds.feature_registry
+        a_feats = reg.by_class(FeatureClass.A_PRE_TREATMENT)
+        demo_class = spec["demo_class"]
+        demo_fc = (FeatureClass.F_LEAKAGE if demo_class == "F"
+                   else FeatureClass.C_BALANCE_GATED_INTIME)
+        demo_feats = reg.by_class(demo_fc)
+        if not a_feats or not demo_feats:
+            continue
+        adj_a, info_a = local_cupac_adjust(data, ycol, a_feats, random_state=random_state)
+        adj_x, info_x = local_cupac_adjust(data, ycol, a_feats + demo_feats,
+                                           random_state=random_state)
+        tmp_a = data.assign(_adj=adj_a.to_numpy())
+        tmp_x = data.assign(_adj=adj_x.to_numpy())
+        est_a = estimate_ate(tmp_a, "_adj", tcol)
+        est_x = estimate_ate(tmp_x, "_adj", tcol)
+        vr_a, vr_x = info_a["variance_reduction"], info_x["variance_reduction"]
+        vr_vs_a = round(float((1 - est_x["variance"] / max(est_a["variance"], 1e-12)) * 100), 4)
+        incr = round(float(vr_x - vr_a), 4)
+        if demo_class == "F":
+            method, safety = "unsafe_demo_A_plus_F_leakage", "unsafe_demo"
+            notes = (f"F-leakage демо: ATE {est_a['ate']:.4f}→{est_x['ate']:.4f}, "
+                     f"var.red {vr_a:.1f}%→{vr_x:.1f}% — лишняя «эффективность» за счёт "
+                     f"утечки исхода; запрещён в estimator")
+        else:
+            method, safety = "sklearn_cupac_A_plus_C_sandbox", "sandbox_demo"
+            notes = (f"C-sandbox (constructed, не реальная B/C): var.red {vr_a:.1f}%→"
+                     f"{vr_x:.1f}%; observational treatment — ATE неинтерпретируем как causal")
+        extra_rows.append(_sandbox_delta_row(
+            name, spec["validation_level"], method, "sklearn_cupac_A", est_x, tcol,
+            round(float(vr_x), 4), vr_vs_a, incr, [demo_class], len(demo_feats),
+            safety, notes))
+        print(f"  demo {method}: ATE {est_a['ate']:.4f}→{est_x['ate']:.4f} "
+              f"var.red {vr_a:.1f}%→{vr_x:.1f}%")
+
+    diag_df = pd.DataFrame(diag_rows)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    diag_df.round(6).to_csv(SANDBOX_CSV, index=False)
+    print(f"\n[written] {SANDBOX_CSV}  ({len(diag_df)} rows)")
+    return diag_df, extra_rows
+
+
 # --- coverage-карта представительности классов признаков по датасетам --------
 # Ручная сводка (см. docs/06_expanded_dataset_scouting.md): 1 = есть/кандидат, 0 = нет.
 FEATURE_COVERAGE = {
-    #              A  B  C  D  EF
-    "hillstrom":  [1, 0, 0, 0, 1],
-    "lenta":      [1, 0, 0, 0, 0],
-    "x5":         [1, 0, 0, 0, 1],
-    "criteo":     [1, 0, 0, 1, 1],
-    "megafon":    [1, 0, 0, 0, 0],
-    "orange":     [1, 0, 0, 0, 0],
-    "lazada":     [1, 0, 0, 1, 0],
-    "open_bandit":[1, 0, 0, 1, 1],
-    "dunnhumby":  [1, 0, 0, 1, 1],
-    "criteo_priv":[1, 0, 0, 1, 1],
+    #                    A  B  C  D  EF
+    "hillstrom":        [1, 0, 0, 0, 1],
+    "lenta":            [1, 0, 0, 0, 0],
+    "x5_retailhero":    [1, 0, 0, 0, 1],
+    "criteo":           [1, 0, 0, 1, 1],
+    "megafon":          [1, 0, 0, 0, 0],
+    "orange_belgium":   [1, 0, 0, 0, 0],
+    "lazada_descn":     [1, 0, 0, 1, 0],
+    "open_bandit":      [1, 0, 0, 1, 1],
+    "dunnhumby":        [1, 0, 1, 1, 1],
+    "criteo_private_ad":[1, 0, 0, 1, 1],
 }
 
 
@@ -395,6 +517,39 @@ def make_figures(df=None) -> None:
     print(f"[written] figures → {FIGURES_DIR}")
 
 
+def make_sandbox_figure(diag_df=None) -> None:
+    """Heatmap прохождения balance gate по классам признаков в песочницах."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if diag_df is None and SANDBOX_CSV.exists():
+        diag_df = pd.read_csv(SANDBOX_CSV)
+    if diag_df is None or not len(diag_df):
+        return
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    piv = diag_df.pivot_table(index="dataset", columns="feature_class",
+                              values="gate_pass_rate", aggfunc="first")
+    fig, ax = plt.subplots(figsize=(5.5, 2.6))
+    im = ax.imshow(piv.to_numpy(dtype=float), cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(piv.columns)))
+    ax.set_xticklabels(piv.columns, fontsize=6, rotation=30, ha="right")
+    ax.set_yticks(range(len(piv.index)))
+    ax.set_yticklabels(piv.index, fontsize=7)
+    for i in range(piv.shape[0]):
+        for j in range(piv.shape[1]):
+            v = piv.to_numpy(dtype=float)[i, j]
+            if not np.isnan(v):
+                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=6)
+    ax.set_title("Sandbox: доля прохождения balance gate по классам", fontsize=8)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "sandbox_balance_gate.png", dpi=90)
+    plt.close(fig)
+    print(f"[written] figure → {FIGURES_DIR / 'sandbox_balance_gate.png'}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="R&D-6 raw dataset audit")
     parser.add_argument("datasets", nargs="*", default=list(DATASETS))
@@ -408,7 +563,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.delta:
         df = run_delta_effects(args.datasets or None)
+        # Sandbox-диагностика: balance gate по классам + unsafe/sandbox-демо строки.
+        diag_df, extra_rows = run_sandbox_diagnostics()
+        if extra_rows:
+            df = pd.concat([df, pd.DataFrame(extra_rows, columns=DELTA_COLUMNS)],
+                           ignore_index=True)
+            RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            df.round(6).to_csv(DELTA_CSV, index=False)
+            print(f"[updated] {DELTA_CSV}  (+{len(extra_rows)} sandbox demo rows)")
         make_figures(df)
+        make_sandbox_figure(diag_df)
         return 0
     names = args.datasets or list(DATASETS)
     write = not args.no_write

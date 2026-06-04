@@ -1,0 +1,8 @@
+dataset,feature_class,n_features,gate_pass_rate,abs_smd_max,policy_status
+dunnhumby,A_pre_treatment,49,0.0612,1.3987,candidate
+dunnhumby,C_balance_gated_intime,3,0.0,0.7057,candidate
+dunnhumby,D_dag_required,1,0.0,1.5169,excluded_for_dag
+dunnhumby,E_mediator_risk,1,0.0,0.442,forbidden
+criteo_private_ad,A_pre_treatment,18,0.5556,0.9205,candidate
+criteo_private_ad,D_dag_required,40,0.575,0.4345,excluded_for_dag
+criteo_private_ad,F_leakage,6,1.0,0.048,forbidden

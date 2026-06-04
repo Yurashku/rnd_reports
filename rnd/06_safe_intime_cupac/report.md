@@ -97,30 +97,55 @@ Lazada/DESCN (рандомизированный test), Criteo (слабый A-o
 > C/D-представительность можно исследовать на event-log / bandit / advertising / journey
 > datasets, которые не являются прямыми A/B uplift benchmark.**
 
-**Delta-эффекты на реальных данных (A-only цепочка `ab_hypex → sklearn_cupac_A`, seed=11).**
-Прогоны и фигуры собираются `python tools/audit_datasets.py --delta`; компактные результаты —
-`expanded_dataset_delta_results.csv`, графики — `figures/`.
+### Сводная таблица итогов (delta-эффекты + песочницы)
+A-only цепочка `ab_hypex → sklearn_cupac_A`, seed=11. Прогон: `python tools/audit_datasets.py
+--delta`; артефакты — `results/06_safe_intime_cupac/` (`expanded_dataset_delta_results.csv`,
+`sandbox_diagnostics.csv`, `figures/`).
 
-| dataset | validation_level | n | ATE (A/B) | var.reduction CUPAC-A vs A/B, % | A-признаков | safety |
-| --- | --- | --- | --- | --- | --- | --- |
-| hillstrom | A_only_real | 64 000 | 0.597 | 0.06 | 18 | ok |
-| orange_belgium | A_only_real | 11 896 | −0.0028 | 6.06 | 336 | ok |
-| lazada_descn | A_only_real | 181 669 | 0.0037 | 5.41 | 83 | ok |
-| lenta | A_only_real | 687 029 | 0.0075 | 14.36 | 196 | ok |
-| x5_retailhero | A_only_real | 200 039 | 0.0332 | 16.10 | 10 | ok |
+| dataset | тип | validation_level | n | A-призн. | ATE (A/B) | var.red CUPAC-A vs A/B, % | safety |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| hillstrom | real RCT | A_only_real | 64 000 | 18 | 0.597 | 0.06 | ok |
+| orange_belgium | real RCT | A_only_real | 11 896 | 336 | −0.0028 | 6.06 | ok |
+| lazada_descn | real uplift | A_only_real | 181 669 | 83 | 0.0037 | 5.41 | ok |
+| lenta | real uplift | A_only_real | 687 029 | 196 | 0.0075 | 14.36 | ok |
+| x5_retailhero | real uplift | A_only_real | 200 039 | 10 | 0.0332 | 16.10 | ok |
+| dunnhumby | research_sandbox | C_D_sandbox | 2 469 | 49 | 118.2 → −0.15 \* | 57.9 | sandbox |
+| criteo_private_ad | event_log_sandbox | D_F_sandbox | 10 000 | 18 | −0.0173 | 19.2 | sandbox |
 
-- **CUPAC-A даёт реальное снижение дисперсии 0–16%** на публичных данных; сильнее всего там,
-  где есть содержательные pre-treatment признаки — **lenta** (именованные пре-кампейн агрегаты,
-  ~14%) и **X5** (engineered история покупок, ~16%). ATE остаётся стабильным (несмещённым).
-- **hillstrom** — pipeline/A-only smoke: целевой `spend` крайне шумный, A-вклад почти нулевой (~0.06%).
-- **Цепочки `+B` и `+B+C` на реальных данных не запускались**: реальных B/C-колонок нет, поэтому
-  относительные delta-эффекты B/C по-прежнему подтверждены **только на синтетике** (таблица выше).
-- **Не вошли в delta-таблицу:** `criteo` — источник отдаёт HTTP 403 (access_blocked);
-  `open_bandit` — пакет `obp` несовместим с pandas 2.x (`DataFrame.drop("col", 1)`),
-  runtime-blocked sandbox; `dunnhumby` / `criteo_private_ad` — адаптеры реализованы
-  (`research_sandbox`/`event_log_sandbox`, demo-only) и строят анкер-based ResearchDataset из
-  локальных данных, но это observational/ad-логи (не RCT) → в реальную A-only delta-таблицу не
-  входят и как safe B/C не используются.
+\* dunnhumby — observational: CUPAC-A здесь **не «безопасно снижает дисперсию», а меняет оценку**
+(ATE 118.2 → −0.15), потому что A-признаки сильно несбалансированы (это конфаундеры, не просто
+шум). Не валидация, а демонстрация: без рандомизации даже A нельзя считать safe.
+
+![Снижение дисперсии по методам и датасетам](../../results/06_safe_intime_cupac/figures/variance_reduction_by_method.png)
+
+![Представительность классов признаков A–F по датасетам](../../results/06_safe_intime_cupac/figures/feature_coverage_heatmap.png)
+
+**Итоги по реальным (рандомизированным) данным:**
+- **CUPAC-A даёт реальное снижение дисперсии 0–16%**; сильнее всего там, где есть содержательные
+  pre-treatment признаки — **lenta** (~14%, именованные пре-кампейн агрегаты) и **X5** (~16%,
+  engineered история покупок). ATE стабилен (несмещён).
+- **hillstrom** — A-only smoke: `spend` крайне шумный, A-вклад ~0.06%.
+- **Цепочки `+B`/`+B+C` на реальных данных не запускались** (реальных B/C-колонок нет) → delta-эффекты
+  B/C подтверждены **только на синтетике** (таблица выше).
+- **Доступ/исключения:** `criteo` (Uplift) — HTTP 403 (access_blocked); `open_bandit` — пакет `obp`
+  несовместим с pandas 2.x (`DataFrame.drop("col", 1)`), runtime-blocked. Оба — в representativeness,
+  но не в прогоне.
+
+### Sandbox-диагностика (balance gate + демонстрация рисков)
+Для песочниц прогнан `diagnose()` — balance gate по классам признаков
+(`results/06_safe_intime_cupac/sandbox_diagnostics.csv`). Это **не** safe-валидация, а полигон,
+показывающий *почему* observational/ad-данные и D/F-признаки опасны.
+
+![Sandbox: доля прохождения balance gate по классам](../../results/06_safe_intime_cupac/figures/sandbox_balance_gate.png)
+
+- **dunnhumby (observational journey):** balance gate проходит лишь **6% A-признаков**
+  (|SMD|max≈1.4); C/D/E — 0%. Без рандомизации даже «pre-treatment» признаки сильно
+  несбалансированы (конфаундинг). Демо C-sandbox (`A+C`): ATE −0.15 → 0.77, var.red 57.9% → 59.2%
+  — ATE неинтерпретируем как causal.
+- **criteo_private_ad (ad-логи):** демо-treatment `display_order==1`; gate_pass: A — 56%, D — 58%,
+  F — 100% (по построению ~независимы от демо-трита). **F-leakage демо** (`A+F`): var.red
+  **19.2% → 93.5%** при сдвиге ATE −0.0173 → −0.0008 — классическая ловушка утечки: outcome-derived
+  признаки рисуют «эффективность», ломая оценку. Поэтому **E/F запрещены в estimator**.
 
 ## Рекомендация по переносу в HypEx
 Подход показывает устойчивый прирост на синтетике и сопоставим с HypEx CUPAC; на реальных
@@ -142,7 +167,7 @@ Lazada/DESCN (рандомизированный test), Criteo (слабый A-o
 ```bash
 pip install -e .[ml]
 # см. notebook.ipynb; график ATE±CI и таблица собираются из rnd_reports.benchmark
-# delta-эффекты на реальных датасетах (читают gitignored data/, raw не коммитятся):
-python tools/audit_datasets.py --delta   # → expanded_dataset_delta_results.csv + figures/
-python tools/generate_pdf.py             # пересобрать report.pdf
+# delta-эффекты + sandbox-диагностика (читают gitignored data/, raw не коммитятся):
+python tools/audit_datasets.py --delta   # → results/06_safe_intime_cupac/{*.csv, figures/}
+python tools/generate_pdf.py             # пересобрать report.pdf (фигуры встраиваются)
 ```

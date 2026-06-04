@@ -222,11 +222,50 @@ _DELTA_COLUMNS = [
 
 
 def test_delta_csv_has_required_columns_if_present() -> None:
-    csv = ROOT / "rnd" / "06_safe_intime_cupac" / "expanded_dataset_delta_results.csv"
+    csv = ROOT / "results" / "06_safe_intime_cupac" / "expanded_dataset_delta_results.csv"
     if not csv.exists():
         pytest.skip("delta CSV ещё не сгенерирован")
     df = pd.read_csv(csv)
     assert list(df.columns) == _DELTA_COLUMNS
+
+
+_SANDBOX_COLUMNS = [
+    "dataset", "feature_class", "n_features", "gate_pass_rate", "abs_smd_max",
+    "policy_status",
+]
+
+
+def test_sandbox_diagnostics_csv_if_present() -> None:
+    csv = ROOT / "results" / "06_safe_intime_cupac" / "sandbox_diagnostics.csv"
+    if not csv.exists():
+        pytest.skip("sandbox diagnostics CSV ещё не сгенерирован")
+    df = pd.read_csv(csv)
+    assert list(df.columns) == _SANDBOX_COLUMNS
+    # песочницы должны присутствовать с разметкой по классам
+    assert {"dunnhumby", "criteo_private_ad"} & set(df["dataset"])
+
+
+def test_pdf_generator_parses_markdown_table_and_image() -> None:
+    # offline-проверка нового matplotlib-PDF-парсера (без рендера PDF).
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "generate_pdf", ROOT / "tools" / "generate_pdf.py")
+    g = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(g)
+    md = (
+        "# Заголовок\n\n"
+        "Абзац кириллицей.\n\n"
+        "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n"
+        "![подпись](results/06_safe_intime_cupac/figures/x.png)\n"
+    )
+    blocks = g.parse_blocks(md)
+    types = [b["type"] for b in blocks]
+    assert "heading" in types and "para" in types
+    table = next(b for b in blocks if b["type"] == "table")
+    assert table["headers"] == ["a", "b"] and table["rows"] == [["1", "2"]]
+    img = next(b for b in blocks if b["type"] == "image")
+    assert img["path"].endswith("x.png")
 
 
 def test_criteo_targets_multi_target_safe() -> None:

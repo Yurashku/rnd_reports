@@ -4,7 +4,7 @@
 - **Связано:** `docs/06_safe_intime_cupac_context.md`,
   `docs/06_real_dataset_raw_audit.md` (предыдущий raw-аудит),
   `src/rnd_reports/datasets/inspect.py`, `src/rnd_reports/datasets/expanded_adapters.py`,
-  `tools/audit_datasets.py`, `rnd/06_safe_intime_cupac/expanded_dataset_delta_results.csv`.
+  `tools/audit_datasets.py`, `results/06_safe_intime_cupac/expanded_dataset_delta_results.csv`.
 - **Scope:** более широкий, чем raw-аудит, поиск + реальная загрузка/инспекция + прототипы
   адаптеров + фактические delta-эффект бенчмарки. Главный фокус — найти представительность
   **C** (затем **D**), включая не-A/B «песочницы» (event-log / bandit / journey / advertising).
@@ -237,9 +237,11 @@ in-time C построить нельзя.
 ## 5. Delta-effect results
 
 Числа генерируются `tools/audit_datasets.py --delta` и сохраняются в
-`rnd/06_safe_intime_cupac/expanded_dataset_delta_results.csv` (компактная сводка, не сырьё).
-Фигуры — `rnd/06_safe_intime_cupac/figures/`. Сводная таблица и интерпретация продублированы в
-`rnd/06_safe_intime_cupac/report.md` (раздел «Expanded public dataset validation»).
+`results/06_safe_intime_cupac/expanded_dataset_delta_results.csv` (компактная сводка, не сырьё)
+плюс `results/06_safe_intime_cupac/sandbox_diagnostics.csv` (balance gate по классам в песочницах).
+Фигуры — `results/06_safe_intime_cupac/figures/`. Сводная таблица, sandbox-диагностика и
+интерпретация продублированы в `rnd/06_safe_intime_cupac/report.md` (раздел «Expanded public
+dataset validation»).
 
 На всех реальных датасетах валиден только путь **A-only** (`ab_hypex` →
 `sklearn_cupac_A`): CUPAC по классу A снижает дисперсию без смещения ATE. Реальной

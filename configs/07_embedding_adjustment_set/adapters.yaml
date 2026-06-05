@@ -1,0 +1,24 @@
+# Дефолты тулкит-адаптеров R&D-7 (эмбеддинги как adjustment set).
+# Используются ноутбуком-витриной поверх rnd_reports.embeddings.
+
+columns:
+  epk_id: epk_id
+  report_dt: report_dt          # месячная гранулярность
+  treatment: treatment
+  embedding_prefix: col_         # входные эмбеддинги col_000, col_001, ...
+  reduced_prefix: emb_           # выход reducer'а emb_000, emb_001, ...
+  propensity_score: propensity_score
+
+# Адаптер 1 — снижение размерности (PCA).
+reducer:
+  reducted_shape: 5
+  seed: 42
+
+# Адаптер 2 — propensity (LogisticRegression на сырых col_*).
+propensity:
+  max_iter: 100
+  reg_param: 0.0
+
+# In-time safety: при заданном cutoff адаптеры обучаются только на report_dt <= cutoff.
+in_time:
+  cutoff: null

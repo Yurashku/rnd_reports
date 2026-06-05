@@ -17,6 +17,8 @@ dependencies = [
 [project.optional-dependencies]
 # Тяжёлые/опциональные ML-зависимости (CatBoost-ветка CUPAC).
 ml = ["catboost>=1.2"]
+# Spark-адаптеры R&D-7 (rnd_reports.embeddings): не нужны остальному пакету.
+spark = ["pyspark>=3.3"]
 # Инструменты разработки.
 dev = ["pytest>=7.0"]
 

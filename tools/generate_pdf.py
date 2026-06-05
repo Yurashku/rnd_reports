@@ -366,10 +366,16 @@ class _Renderer:
             self.fig = None
 
 
+# Детерминированные метаданные: без них matplotlib пишет текущий CreationDate, и каждый
+# прогон даёт новый PDF-байт-поток (лишние git-диффы по всем report.pdf).
+_PDF_METADATA = {"Creator": "rnd_reports/tools/generate_pdf.py", "Producer": "matplotlib",
+                 "CreationDate": None}
+
+
 def render_pdf(md_path: Path, pdf_path: Path) -> None:
     blocks = parse_blocks(md_path.read_text(encoding="utf-8"))
     base_dir = md_path.parent
-    with PdfPages(pdf_path) as pdf:
+    with PdfPages(pdf_path, metadata=_PDF_METADATA) as pdf:
         r = _Renderer(pdf)
         for b in blocks:
             t = b["type"]

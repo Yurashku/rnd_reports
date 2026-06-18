@@ -55,7 +55,7 @@ def plot_pvalue_comparison(result, alpha: float = 0.05):
     else:
         significant = table["p_value"].to_numpy(dtype=float) < alpha
 
-    height = max(3.0, 0.42 * len(targets) + 1.5)
+    height = max(3.2, 0.55 * len(targets) + 1.6)  # выше строка → читаемый вертикальный dodge справа
     fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(11, height), sharey=True)
 
     # --- Левая панель: эффект ± ДИ -----------------------------------------------
@@ -81,17 +81,28 @@ def plot_pvalue_comparison(result, alpha: float = 0.05):
     ax_l.grid(axis="x", ls=":", alpha=0.5)
 
     # --- Правая панель: raw и adjusted p-value -----------------------------------
+    # Внутри строки метрики разносим серии по вертикали (dodge), иначе raw + 5 методов
+    # накладываются в одну точку и сливаются. Порядок серий = порядку в легенде.
     p_cols = p_adj_columns()
-    ax_r.scatter(table["p_value"].clip(lower=1e-300), y, marker="|", s=130,
-                 color="0.15", label="raw p", zorder=3)
-    for name in METHOD_NAMES:
-        ax_r.scatter(table[p_cols[name]].clip(lower=1e-300), y, s=26,
-                     color=_METHOD_COLORS.get(name), label=name, alpha=0.85, zorder=2)
+    series = [("raw p", "p_value", "#111111", "|")]
+    series += [(name, p_cols[name], _METHOD_COLORS.get(name), "o") for name in METHOD_NAMES]
+    offsets = np.linspace(0.30, -0.30, len(series))  # сверху вниз
+
+    for yy in y[:-1]:  # тонкие разделители между метриками
+        ax_r.axhline(yy + 0.5, color="0.92", lw=0.5, zorder=0)
+    for (label, col, color, marker), off in zip(series, offsets):
+        xv = table[col].clip(lower=1e-300)
+        if marker == "|":
+            ax_r.scatter(xv, y + off, marker="|", s=90, color=color, linewidths=1.6,
+                         label=label, zorder=3)
+        else:
+            ax_r.scatter(xv, y + off, marker="o", s=30, color=color, label=label,
+                         alpha=0.9, edgecolors="white", linewidths=0.4, zorder=2)
     ax_r.axvline(alpha, color="#d62728", ls="--", lw=1.2, label=f"α = {alpha:g}")
     ax_r.set_xscale("log")
     ax_r.set_xlabel("p-value (лог-шкала)")
     ax_r.set_title("raw и adjusted p-value по методам")
-    ax_r.legend(fontsize=7, loc="best", ncol=2)
+    ax_r.legend(fontsize=7, loc="lower left", ncol=2, framealpha=0.9)
     ax_r.grid(axis="x", ls=":", alpha=0.5)
 
     fig.tight_layout()

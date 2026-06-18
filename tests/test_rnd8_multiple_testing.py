@@ -41,6 +41,14 @@ def test_plot_pvalue_comparison_returns_figure() -> None:
     assert fig.axes[1].get_xscale() == "log"
 
 
+def test_degenerate_target_raises_clear_error() -> None:
+    # Колонка-константа даёт NaN p-value -> понятная ошибка вместо scipy "`ps` ... between 0 and 1".
+    df, _ = make_ab_table(n=400, n_targets=3, seed=4)
+    df["target_const"] = 7.0
+    with pytest.raises(ValueError, match="target_const"):
+        run_comparison(df, n_resamples=50)
+
+
 def test_table_contract_validation() -> None:
     df, _ = make_ab_table(n=500, n_targets=5, seed=1)
     assert validate_input_table(df) == [f"target_{i}" for i in range(1, 6)]

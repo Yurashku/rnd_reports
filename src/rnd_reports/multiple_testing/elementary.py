@@ -100,7 +100,20 @@ def compute_elementary_tests(
                 "ci_high": float(ci.high),
             }
         )
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+
+    # Вырожденные колонки (константа без дисперсии или <2 непустых значений в группе) дают
+    # NaN p-value, который дальше роняет коррекцию с загадочным "`ps` must include only numbers
+    # between 0 and 1." Ловим заранее с понятным сообщением: на реальных данных это обычно
+    # лишние не-метрики, попавшие в target по контракту «всё, кроме id/treatment».
+    bad = out.loc[out["p_value"].isna(), "target"].tolist()
+    if bad:
+        raise ValueError(
+            f"Невозможно посчитать p-value для target-колонок {bad}: вероятно, это константы "
+            "или в одной из групп <2 непустых значений. Уберите эти колонки из таблицы или "
+            "задайте явный список метрик через target_cols."
+        )
+    return out
 
 
 def compute_vectorized_t_stats(y: np.ndarray, treatment: np.ndarray) -> np.ndarray:

@@ -41,6 +41,7 @@ from .pipeline import (
     summarize_pvalue_profile,
     summarize_rejections,
 )
+from .plots import plot_pvalue_comparison
 from .simulation import Scenario, operating_characteristics, rho_grid
 from .synthetic import make_ab_table, make_equicorrelation_cov
 
@@ -64,6 +65,8 @@ __all__ = [
     "summarize_rejections",
     "evaluate_against_truth",
     "summarize_pvalue_profile",
+    # графика single-table
+    "plot_pvalue_comparison",
     # synthetic
     "make_ab_table",
     "make_equicorrelation_cov",

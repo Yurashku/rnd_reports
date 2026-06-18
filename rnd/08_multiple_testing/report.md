@@ -55,6 +55,12 @@ FWER.
 
 ![Решения методов на одной таблице](../../results/08_multiple_testing/figures/single_table_rejections.png)
 
+Детальнее по каждой метрике — эффект с доверительным интервалом (слева) и raw/adjusted p-value
+по методам в лог-шкале с порогом α (справа): видно, как FWER-коррекция отодвигает p-value к
+незначимости и какие метрики дают надёжный сигнал.
+
+![Эффекты с ДИ и p-value по методам](../../results/08_multiple_testing/figures/pvalue_ci_comparison.png)
+
 **Сравнение «через p-values».** Помимо reject-решений методы сравниваются скалярными
 сводками из adjusted p-value (`res.pvalue_profile`): средний adjusted-p на истинно-ненулевых
 метриках (`mean_p_adj_signal` — сила детекции), на нулевых (`mean_p_adj_null` — калибровка) и

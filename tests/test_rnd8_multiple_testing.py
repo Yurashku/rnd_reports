@@ -13,6 +13,7 @@ from rnd_reports.multiple_testing import (
     compute_elementary_tests,
     make_ab_table,
     operating_characteristics,
+    plot_pvalue_comparison,
     run_comparison,
     validate_input_table,
 )
@@ -26,6 +27,18 @@ def _corrected(df, true_effects=None, **kw):
     targets = validate_input_table(df)
     tests = compute_elementary_tests(df, targets)
     return add_corrections(tests, df, targets, **kw)
+
+
+def test_plot_pvalue_comparison_returns_figure() -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    df, true_effects = make_ab_table(n=600, n_targets=6, n_true=2, seed=3)
+    res = run_comparison(df, true_effects=true_effects, n_resamples=50, random_state=3)
+    fig = plot_pvalue_comparison(res, alpha=0.05)
+    # Две панели: слева эффекты ± ДИ, справа raw/adjusted p-value.
+    assert len(fig.axes) == 2
+    assert fig.axes[1].get_xscale() == "log"
 
 
 def test_table_contract_validation() -> None:

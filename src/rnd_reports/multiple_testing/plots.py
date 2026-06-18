@@ -55,8 +55,8 @@ def plot_pvalue_comparison(result, alpha: float = 0.05, reference_method: str = 
     if has_ci:
         xerr = np.vstack([table["effect"] - table["ci_low"],
                           table["ci_high"] - table["effect"]])
-        ax_l.errorbar(table["effect"], y, xerr=xerr, fmt="none", ecolor="0.6",
-                      elinewidth=1.3, capsize=2, zorder=1)
+        ax_l.errorbar(table["effect"], y, xerr=xerr, fmt="none", ecolor="0.45",
+                      elinewidth=1.6, capsize=4, capthick=1.4, zorder=1)
     for sig, color, label in [(True, "#d62728", f"отвергнута ({reference_method})"),
                               (False, "#1f77b4", "не отвергнута")]:
         mask = rejected == sig

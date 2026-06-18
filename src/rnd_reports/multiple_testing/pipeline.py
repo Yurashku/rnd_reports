@@ -141,8 +141,9 @@ def run_comparison(
         n_resamples=n_resamples, random_state=random_state,
     )
 
-    # Компактная таблица для просмотра глазами: статистики + adj p-value + reject-флаги.
-    cols = ["target", "effect", "p_value"]
+    # Компактная таблица для просмотра глазами: эффект с ДИ + adj p-value + reject-флаги.
+    # ci_low/ci_high из Welch-теста несём дальше — нужны для forest-плота эффектов.
+    cols = ["target", "effect", "ci_low", "ci_high", "p_value"]
     for name in METHOD_NAMES:
         cols += [f"p_adj_{name}", f"reject_{name}"]
     table = corrected[cols].sort_values("p_value").reset_index(drop=True)

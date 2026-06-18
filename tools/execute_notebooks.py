@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import contextlib
 import io
@@ -47,6 +48,25 @@ def _capture_figures() -> list[dict]:
     return outputs
 
 
+def _render_data(obj) -> dict:
+    """Собрать ``data`` для display/execute_result: rich text/html (если есть) + text/plain.
+
+    DataFrame/Series и любой объект с ``_repr_html_`` отрисуются настоящей HTML-таблицей,
+    а не как ``print(df.to_string())``. text/plain — фолбэк для просмотрщиков без HTML.
+    """
+    data: dict = {}
+    html = getattr(obj, "_repr_html_", None)
+    if callable(html):
+        try:
+            rendered = obj._repr_html_()
+            if rendered:
+                data["text/html"] = rendered
+        except Exception:  # noqa: BLE001 — repr не должен ронять прогон
+            pass
+    data["text/plain"] = repr(obj)
+    return data
+
+
 def execute_notebook(path: Path) -> None:
     notebook = json.loads(path.read_text(encoding="utf-8"))
     ns: dict = {}
@@ -60,14 +80,34 @@ def execute_notebook(path: Path) -> None:
         stdout = io.StringIO()
         outputs = []
 
+        # `display(obj)` копит rich-выводы в буфер ячейки (как display_data в Jupyter).
+        display_buffer: list[dict] = []
+        ns["display"] = lambda obj, _buf=display_buffer: _buf.append(
+            {"output_type": "display_data", "data": _render_data(obj), "metadata": {}}
+        )
+
         try:
             with contextlib.redirect_stdout(stdout):
-                exec(compile(code, filename=str(path), mode="exec"), ns, ns)
+                # Последнее выражение ячейки оформляем как execute_result — иначе вывод
+                # ячеек, заканчивающихся на `df`, терялся при пакетном прогоне.
+                tree = ast.parse(code)
+                last_expr = tree.body.pop() if tree.body and isinstance(
+                    tree.body[-1], ast.Expr) else None
+                exec(compile(tree, filename=str(path), mode="exec"), ns, ns)
+                result = None
+                if last_expr is not None:
+                    expr = ast.fix_missing_locations(ast.Expression(last_expr.value))
+                    result = eval(compile(expr, filename=str(path), mode="eval"), ns, ns)
 
             text = stdout.getvalue()
             if text:
                 outputs.append({"name": "stdout", "output_type": "stream", "text": text})
+            outputs.extend(display_buffer)
             outputs.extend(_capture_figures())
+            if result is not None:
+                outputs.append({"output_type": "execute_result",
+                                "data": _render_data(result), "metadata": {},
+                                "execution_count": counter})
 
             cell["execution_count"] = counter
             cell["outputs"] = outputs

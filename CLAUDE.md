@@ -34,26 +34,39 @@ planned_rnd/         # шаблон для новых RnD
 - `synthetic/` — генераторы и сценарии синтетических данных (известные A–F по построению).
 - `embeddings/` — RnD-7: тулкит-адаптеры pyspark-эмбеддингов (`reducer.py` PCA-снижение,
   `propensity.py` propensity-score с in-time safety); pyspark — опциональный extra `[spark]`.
+- `multiple_testing/` — RnD-8: сравнение методов множественного тестирования OR-региона
+  (Bonferroni/Holm/Westfall–Young/Romano–Wolf + BH) на готовых решениях scipy/statsmodels;
+  single-table (`pipeline.py`) + Monte-Carlo operating characteristics (`simulation.py`).
 
 ## Канон RnD (однородность)
 
-Каждая `rnd/0N_<topic>/` содержит **ровно**: `notebook.ipynb`, `report.md`, `report.pdf`,
-`README.md`. Никаких `*.csv`/`*.png`/`*.py`/`*.txt` внутри rnd-папок — генерируемые артефакты
-идут в `results/0N_<topic>/`, контекст — в `docs/`, переиспользуемый код — в `src/rnd_reports/`.
+Полный рабочий процесс — в [`docs/WORKFLOW.md`](docs/WORKFLOW.md). Каждая `rnd/0N_<topic>/`
+содержит **обязательно** `notebook.ipynb`, `report.md`, `README.md` и **опционально**
+`notebook_internal.ipynb` и `report.pdf`. Никаких `*.csv`/`*.png`/`*.py`/`*.txt` внутри
+rnd-папок (исключение — `notebook_internal.ipynb`) — генерируемые артефакты идут в
+`results/0N_<topic>/`, контекст — в `docs/`, переиспользуемый код — в `src/rnd_reports/`.
 
-- `report.md` — единственный источник содержания; `report.pdf` собирается из него автоматически.
+- `notebook.ipynb` — исследовательская витрина (синтетика + внешние данные, импорты из пакета).
+- `notebook_internal.ipynb` — самодостаточный ноутбук для **внутреннего контура**: код вшит в
+  ячейки, таблица читается из переменной `INPUT_CSV`, отдельная ячейка-генератор синтезирует
+  одну таблицу (её не запускают во внутреннем контуре, но запускают в репо для проверки).
+- `report.md` — единственный источник содержания; `report.pdf` опционален и собирается только
+  для RnD из `PDF_ENABLED`.
 - `report.md` ссылается на соответствующий код/ноутбук; графики встраиваются в PDF через
   `![alt](../../results/0N_<topic>/figures/...png)`.
 
 ## Тулинг
 
 ```bash
-python tools/generate_pdf.py          # пересобрать ВСЕ rnd/*/report.pdf из report.md
-python tools/execute_notebooks.py     # выполнить все rnd/*/notebook.ipynb
+python tools/generate_pdf.py          # собрать report.pdf только для RnD из PDF_ENABLED
+python tools/execute_notebooks.py     # выполнить все rnd/*/notebook*.ipynb (вкл. internal)
 python tools/audit_datasets.py --delta # RnD-6: delta-эффекты + sandbox-диагностика → results/
 ```
 - `generate_pdf.py` — matplotlib-рендер (шрифт DejaVu → читаемая кириллица, markdown-таблицы
-  сеткой, встраивание картинок). Автодискавери `rnd/*/report.md`.
+  сеткой, встраивание картинок). PDF опционален: автодискавери `rnd/*/report.md` фильтруется по
+  `PDF_ENABLED`; явный путь к `report.md` в аргументах перекрывает фильтр.
+- `execute_notebooks.py` — автодискавери `rnd/*/notebook*.ipynb`: гоняет и исследовательский, и
+  internal-ноутбук (internal обязан проходить до конца в репозитории).
 - `audit_datasets.py` — RnD-6-специфичный CLI; пишет артефакты в `results/06_safe_intime_cupac/`.
 
 ## Политика данных

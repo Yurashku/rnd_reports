@@ -2,10 +2,13 @@
 
 Рендер через matplotlib (шрифт DejaVu Sans) — корректно отображает **кириллицу**,
 рисует markdown-таблицы настоящими сетками и встраивает картинки ``![alt](path)``.
-Цели находятся автоматически: каждый ``rnd/<topic>/report.md`` подхватывается без
-правки списка. Интерфейс прежний::
 
-    python tools/generate_pdf.py
+PDF нужен не каждому RnD: при автодискавери собираются только RnD из ``PDF_ENABLED``
+(по имени папки ``0N_<topic>``). Чтобы собрать PDF для нового RnD, либо добавь его в
+``PDF_ENABLED``, либо передай путь к ``report.md`` явным аргументом (он перекрывает фильтр)::
+
+    python tools/generate_pdf.py                       # только RnD из PDF_ENABLED
+    python tools/generate_pdf.py rnd/09_topic/report.md  # разовая сборка конкретного RnD
 """
 
 from __future__ import annotations
@@ -21,6 +24,20 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 
 RND_ROOT = Path("rnd")
+
+# RnD, для которых собираем report.pdf. PDF опционален: новые RnD по умолчанию без PDF —
+# добавь сюда имя папки `0N_<topic>`, если отчёт нужен в PDF. Разовую сборку можно сделать
+# и без правки списка — передав путь к report.md явным аргументом командной строки.
+PDF_ENABLED: set[str] = {
+    "01_bonferroni_aa_matching",
+    "02_pyspark_fast_aa",
+    "03_autoconfig_homogeneity_split",
+    "04_faiss_matcher_tradeoff",
+    "05_iv_cupac_policy",
+    "06_safe_intime_cupac",
+    "07_embedding_adjustment_set",
+    "08_multiple_testing",
+}
 
 # Геометрия A4 в пунктах (1 in = 72 pt). Координаты — доля фигуры (0..1).
 PAGE_W_PT, PAGE_H_PT = 595.0, 842.0
@@ -40,7 +57,7 @@ SIZE_TABLE = 8.0
 
 
 def discover_targets() -> list[Path]:
-    return sorted(RND_ROOT.glob("*/report.md"))
+    return sorted(p for p in RND_ROOT.glob("*/report.md") if p.parent.name in PDF_ENABLED)
 
 
 def _pt2fracy(pt: float) -> float:
@@ -401,9 +418,14 @@ def render_pdf(md_path: Path, pdf_path: Path) -> None:
 
 
 def main() -> None:
-    targets = discover_targets()
+    import sys
+
+    # Явные пути к report.md перекрывают фильтр PDF_ENABLED (разовая сборка); иначе —
+    # автодискавери только по включённым в PDF_ENABLED RnD.
+    args = [Path(a) for a in sys.argv[1:]]
+    targets = args or discover_targets()
     if not targets:
-        raise FileNotFoundError(f"Не найдены report.md в {RND_ROOT}/*/")
+        raise FileNotFoundError(f"Не найдены report.md в {RND_ROOT}/*/ (см. PDF_ENABLED)")
     for md_path in targets:
         pdf_path = md_path.with_suffix(".pdf")
         render_pdf(md_path, pdf_path)

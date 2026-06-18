@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .methods import METHOD_NAMES, p_adj_columns, reject_columns
+from .methods import METHOD_NAMES, p_adj_columns
 
 # Палитра методов — единообразно с порядком METHOD_NAMES в таблицах/графиках.
 _METHOD_COLORS = {
@@ -27,13 +27,17 @@ _METHOD_COLORS = {
 }
 
 
-def plot_pvalue_comparison(result, alpha: float = 0.05, reference_method: str = "holm"):
+def plot_pvalue_comparison(result, alpha: float = 0.05):
     """Двухпанельная визуализация single-table сравнения; возвращает matplotlib Figure.
+
+    Цвет точек слева определяется самим доверительным интервалом (пересекает 0 или нет) —
+    это «сырая» значимость без поправки на множественность; сравнение методов с поправкой
+    (Holm, Romano–Wolf и т.д.) полностью отражено на правой панели. Так левая панель не
+    привязана к произвольно выбранному методу.
 
     Параметры:
         result: :class:`ComparisonResult` из :func:`run_comparison`;
-        alpha: порог значимости (вертикальная линия на правой панели);
-        reference_method: метод, по решению которого красятся точки эффектов слева.
+        alpha: порог значимости (вертикальная линия на правой панели).
     """
     import matplotlib.pyplot as plt
 
@@ -43,10 +47,13 @@ def plot_pvalue_comparison(result, alpha: float = 0.05, reference_method: str = 
     targets = table["target"].tolist()
     y = np.arange(len(targets))
 
+    # Значимость для раскраски — по самому ДИ (пересекает 0 или нет), т.е. сырая, без поправки.
+    # Если ДИ нет — фолбэк на сырой p-value < alpha (эквивалентно). Поправленные решения — справа.
     has_ci = {"ci_low", "ci_high"}.issubset(table.columns)
-    reject_col = reject_columns().get(reference_method)
-    rejected = (table[reject_col].to_numpy(dtype=bool)
-                if reject_col in table.columns else np.zeros(len(table), dtype=bool))
+    if has_ci:
+        significant = (table["ci_low"] > 0).to_numpy() | (table["ci_high"] < 0).to_numpy()
+    else:
+        significant = table["p_value"].to_numpy(dtype=float) < alpha
 
     height = max(3.0, 0.42 * len(targets) + 1.5)
     fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(11, height), sharey=True)
@@ -57,10 +64,11 @@ def plot_pvalue_comparison(result, alpha: float = 0.05, reference_method: str = 
                           table["ci_high"] - table["effect"]])
         ax_l.errorbar(table["effect"], y, xerr=xerr, fmt="none", ecolor="0.45",
                       elinewidth=1.6, capsize=4, capthick=1.4, zorder=1)
-    # «Значимый эффект» = H0 отвергнута reference-методом (надёжный сигнал); понятнее жаргона.
-    for sig, color, label in [(True, "#d62728", f"значимый эффект ({reference_method})"),
-                              (False, "#1f77b4", "незначимый эффект")]:
-        mask = rejected == sig
+    # Цвет — по доверительному интервалу: не включает 0 → сырой сигнал значим (без поправки).
+    sig_label = "ДИ не включает 0" if has_ci else f"raw p < {alpha:g}"
+    nonsig_label = "ДИ включает 0" if has_ci else f"raw p ≥ {alpha:g}"
+    for sig, color, label in [(True, "#d62728", sig_label), (False, "#1f77b4", nonsig_label)]:
+        mask = significant == sig
         if mask.any():
             ax_l.scatter(table["effect"][mask], y[mask], color=color, s=34, zorder=2, label=label)
     ax_l.axvline(0.0, color="0.3", ls="--", lw=1)

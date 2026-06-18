@@ -57,8 +57,9 @@ def plot_pvalue_comparison(result, alpha: float = 0.05, reference_method: str = 
                           table["ci_high"] - table["effect"]])
         ax_l.errorbar(table["effect"], y, xerr=xerr, fmt="none", ecolor="0.45",
                       elinewidth=1.6, capsize=4, capthick=1.4, zorder=1)
-    for sig, color, label in [(True, "#d62728", f"отвергнута ({reference_method})"),
-                              (False, "#1f77b4", "не отвергнута")]:
+    # «Значимый эффект» = H0 отвергнута reference-методом (надёжный сигнал); понятнее жаргона.
+    for sig, color, label in [(True, "#d62728", f"значимый эффект ({reference_method})"),
+                              (False, "#1f77b4", "незначимый эффект")]:
         mask = rejected == sig
         if mask.any():
             ax_l.scatter(table["effect"][mask], y[mask], color=color, s=34, zorder=2, label=label)

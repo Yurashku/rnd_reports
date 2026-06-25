@@ -5,19 +5,25 @@ columns:
   epk_id: epk_id
   report_dt: report_dt          # месячная гранулярность
   treatment: treatment
-  embedding_prefix: col_         # входные эмбеддинги col_000, col_001, ...
-  reduced_prefix: emb_           # выход reducer'а emb_000, emb_001, ...
-  propensity_score: propensity_score
+  embedding_prefix: emb_         # входные эмбеддинги emb_0_val, emb_1_val, ... (легаси: col_000)
+  reduced_prefix: red_           # выход reducer'а red_0, red_1, ...
+  propensity_score: prop_score
 
-# Адаптер 1 — снижение размерности (PCA).
+# Скрипт 1 — снижение размерности (StandardScaler + PCA).
 reducer:
-  reducted_shape: 5
+  red_size: 5
   seed: 42
 
-# Адаптер 2 — propensity (LogisticRegression на сырых col_*).
+# Скрипт 2 — propensity: из LogisticRegression / GBTClassifier берётся модель с лучшим
+# ROC-AUC (selection-эвристика выбора модели, не causal-критерий — он balance/overlap).
 propensity:
+  models: [logreg, gbt]
   max_iter: 100
   reg_param: 0.0
+  gbt_max_depth: 5
+  gbt_max_iter: 20
+  val_fraction: 0.3
+  seed: 42
 
 # In-time safety: при заданном cutoff адаптеры обучаются только на report_dt <= cutoff.
 in_time:

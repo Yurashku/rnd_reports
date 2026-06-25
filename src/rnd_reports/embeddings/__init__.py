@@ -1,19 +1,23 @@
 """Тулкит-адаптеры R&D-7: эмбеддинги клиента как adjustment set.
 
 Адаптеры-«переходники» поверх pyspark-датасета со схемой
-``epk_id, report_dt (месячная гранулярность), col_000, col_001, ..., col_{k}``:
+``epk_id, report_dt, emb_0_val, emb_1_val, ..., emb_n_val`` (поддерживается и
+легаси-формат ``col_000, ...``):
 
-- :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``reducted_shape``
-  (PCA), отдаёт ``[epk_id, report_dt, emb_000, ...]``;
-- :class:`PropensityScorer` — джойнит с датасетом трита и сводит эмбеддинги к
-  одному ``propensity_score`` = P(treatment=1) (LogisticRegression на сырых ``col_*``).
+- :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``red_size``
+  (StandardScaler + PCA), отдаёт ``[epk_id, report_dt, red_0, ...]``;
+- :class:`PropensityScorer` — джойнит с таблицей псевдо-трита и сводит эмбеддинги к
+  одному ``prop_score`` = P(treatment=1); из LogisticRegression / GBTClassifier берётся
+  модель с лучшим ROC-AUC (инженерная selection-эвристика, не causal-критерий качества).
 
 Оба адаптера поддерживают **in-time safety**: обучение только на ``report_dt <= cutoff``
 и применение к более поздним срезам (без утечки из будущего).
 
 pyspark — **опциональная** зависимость (extra ``spark``). Импорт самого пакета её
 не требует: контрактные хелперы доступны всегда, а Spark-адаптеры подгружаются лениво.
-Сам causal-эксперимент R&D-7 пока не реализован — см. :mod:`rnd_reports.embeddings.experiment`.
+Сам causal-эксперимент R&D-7 реализован в numpy/sklearn-слое
+(:mod:`rnd_reports.embeddings.experiment`, :mod:`rnd_reports.embeddings.synthetic`):
+оценка ATE с поправкой и диагностика баланса/overlap — pyspark для него не нужен.
 """
 
 from __future__ import annotations

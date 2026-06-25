@@ -62,43 +62,63 @@ def spark():
 N_FEATURES = 6
 
 
-def _embeddings_df(spark):
-    # 12 наблюдений за 3 месяца; эмбеддинги слегка коррелируют между собой.
+def _embeddings_df(spark, n: int = 60):
+    # n наблюдений за 3 месяца; эмбеддинги слегка коррелируют между собой.
     rows = []
-    for i in range(12):
+    for i in range(n):
         month = f"2024-0{1 + i % 3}-01"
         base = float(i)
         feats = [base + j * 0.5 + (i % 4) * 0.1 for j in range(N_FEATURES)]
         rows.append((1000 + i, month, *feats))
-    cols = ["epk_id", "report_dt"] + [f"col_{j:03d}" for j in range(N_FEATURES)]
+    cols = ["epk_id", "report_dt"] + [f"emb_{j}_val" for j in range(N_FEATURES)]
     return spark.createDataFrame(rows, cols)
 
 
-def _treatment_df(spark):
-    rows = [(1000 + i, f"2024-0{1 + i % 3}-01", i % 2) for i in range(12)]
-    return spark.createDataFrame(rows, ["epk_id", "report_dt", "treatment"])
+def _treatment_df(spark, n: int = 60):
+    # Таблица псевдо-разбиения: epk_id × treatment (без report_dt) -> джойн по epk_id.
+    rows = [(1000 + i, i % 2) for i in range(n)]
+    return spark.createDataFrame(rows, ["epk_id", "treatment"])
 
 
 def test_reducer_output_schema_and_count(spark) -> None:
     df = _embeddings_df(spark)
-    reduced = EmbeddingReducer(reducted_shape=3).fit_transform(df)
-    assert reduced.columns == ["epk_id", "report_dt", "emb_000", "emb_001", "emb_002"]
+    reduced = EmbeddingReducer(red_size=3).fit_transform(df)
+    assert reduced.columns == ["epk_id", "report_dt", "red_0", "red_1", "red_2"]
     assert reduced.count() == df.count()
 
 
 def test_reducer_default_shape(spark) -> None:
     reduced = EmbeddingReducer().fit_transform(_embeddings_df(spark))
-    emb_cols = [c for c in reduced.columns if c.startswith(contracts.REDUCED_PREFIX)]
-    assert len(emb_cols) == 5
+    red_cols = [c for c in reduced.columns if c.startswith(contracts.REDUCED_PREFIX)]
+    assert len(red_cols) == 5
 
 
 def test_reducer_in_time_fit_then_transform_later(spark) -> None:
     df = _embeddings_df(spark)
-    reducer = EmbeddingReducer(reducted_shape=2).fit(df, cutoff="2024-01-01")
+    reducer = EmbeddingReducer(red_size=2).fit(df, cutoff="2024-01-01")
     # обучились только на январе, применяем ко всем срезам
     out = reducer.transform(df)
-    assert out.columns == ["epk_id", "report_dt", "emb_000", "emb_001"]
+    assert out.columns == ["epk_id", "report_dt", "red_0", "red_1"]
     assert out.count() == df.count()
+
+
+def test_reducer_accepts_legacy_col_format(spark) -> None:
+    # Витрина R&D-7 подаёт легаси-формат col_000 — детектор обязан его понимать.
+    rows = [(1000 + i, "2024-01-01", float(i), float(i) + 0.5) for i in range(8)]
+    legacy = spark.createDataFrame(rows, ["epk_id", "report_dt", "col_000", "col_001"])
+    out = EmbeddingReducer(red_size=2).fit_transform(legacy)
+    assert out.columns == ["epk_id", "report_dt", "red_0", "red_1"]
+
+
+def test_reducer_reducted_shape_alias_deprecated(spark) -> None:
+    # Старое имя reducted_shape поддерживается с DeprecationWarning и эквивалентно red_size.
+    with pytest.warns(DeprecationWarning):
+        reducer = EmbeddingReducer(reducted_shape=2)
+    assert reducer.red_size == 2
+    out = reducer.fit_transform(_embeddings_df(spark))
+    assert out.columns == ["epk_id", "report_dt", "red_0", "red_1"]
+    with pytest.warns(DeprecationWarning):
+        assert reducer.reducted_shape == 2
 
 
 def test_reducer_transform_before_fit_raises(spark) -> None:
@@ -108,15 +128,20 @@ def test_reducer_transform_before_fit_raises(spark) -> None:
 
 def test_propensity_join_and_range(spark) -> None:
     emb = _embeddings_df(spark)
-    trt = _treatment_df(spark)
-    scores = PropensityScorer().fit(emb, trt).transform(emb)
-    assert scores.columns == ["epk_id", "report_dt", "propensity_score"]
+    trt = _treatment_df(spark)  # epk_id × treatment, джойн по epk_id
+    scorer = PropensityScorer(seed=0).fit(emb, trt)
+    scores = scorer.transform(emb)
+    assert scores.columns == ["epk_id", "report_dt", "prop_score"]
     assert scores.count() == emb.count()
+
+    # обе модели оценены, выбрана лучшая
+    assert set(scorer.metrics_) == {"logreg", "gbt"}
+    assert scorer.best_model_name_ in {"logreg", "gbt"}
 
     from pyspark.sql import functions as F
 
     bounds = scores.select(
-        F.min("propensity_score").alias("lo"), F.max("propensity_score").alias("hi")
+        F.min("prop_score").alias("lo"), F.max("prop_score").alias("hi")
     ).collect()[0]
     assert 0.0 <= bounds["lo"] <= bounds["hi"] <= 1.0
 
@@ -124,7 +149,7 @@ def test_propensity_join_and_range(spark) -> None:
 def test_propensity_in_time_cutoff(spark) -> None:
     emb = _embeddings_df(spark)
     trt = _treatment_df(spark)
-    scorer = PropensityScorer().fit(emb, trt, cutoff="2024-02-01")
+    scorer = PropensityScorer(seed=0).fit(emb, trt, cutoff="2024-02-01")
     scores = scorer.transform(emb)
     assert scores.count() == emb.count()
 

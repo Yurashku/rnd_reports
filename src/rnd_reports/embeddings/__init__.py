@@ -1,12 +1,13 @@
 """Тулкит-адаптеры R&D-7: эмбеддинги клиента как adjustment set.
 
 Адаптеры-«переходники» поверх pyspark-датасета со схемой
-``epk_id, report_dt (месячная гранулярность), col_000, col_001, ..., col_{k}``:
+``epk_id, report_dt, emb_0_val, emb_1_val, ..., emb_n_val`` (поддерживается и
+легаси-формат ``col_000, ...``):
 
-- :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``reducted_shape``
-  (PCA), отдаёт ``[epk_id, report_dt, emb_000, ...]``;
-- :class:`PropensityScorer` — джойнит с датасетом трита и сводит эмбеддинги к
-  одному ``propensity_score`` = P(treatment=1) (LogisticRegression на сырых ``col_*``).
+- :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``red_size``
+  (StandardScaler + PCA), отдаёт ``[epk_id, report_dt, red_0, ...]``;
+- :class:`PropensityScorer` — джойнит с таблицей псевдо-трита и сводит эмбеддинги к
+  одному ``prop_score`` = P(treatment=1) (лучший из LogisticRegression / GBTClassifier).
 
 Оба адаптера поддерживают **in-time safety**: обучение только на ``report_dt <= cutoff``
 и применение к более поздним срезам (без утечки из будущего).

@@ -16,27 +16,40 @@
 Исходный pyspark-датасет эмбеддингов имеет схему:
 
 ```
-epk_id, report_dt (месячная гранулярность), col_000, col_001, ..., col_{k}
+epk_id, report_dt (месячная гранулярность), emb_0_val, emb_1_val, ..., emb_n_val
 ```
 
-Назначение воздействия хранится отдельно — датасет трита с колонками
-`epk_id, report_dt, treatment` (бинарный).
+Поддерживается и легаси-формат `col_000, col_001, ...` (старая витрина) — детектор колонок
+распознаёт оба. Назначение воздействия хранится отдельно — таблица трита с колонками
+`epk_id, treatment` (бинарный); `report_dt` опционален: если он есть, джойн идёт по
+`(epk_id, report_dt)`, иначе по `epk_id` (таблица псевдо-разбиения `epk_id × treatment`).
 
 ## Тулкит-адаптеры (готово)
 
 Реализованы в пакете `src/rnd_reports/embeddings/` как «переходники» данных:
 
 1. **`EmbeddingReducer`** (`reducer.py`) — снижает размерность эмбеддингов до
-   `reducted_shape` (по умолчанию 5) методом **PCA** (`pyspark.ml`). Выход:
-   `[epk_id, report_dt, emb_000, ..., emb_{reducted_shape-1}]`.
-2. **`PropensityScorer`** (`propensity.py`) — джойнит эмбеддинги с датасетом трита по
-   `(epk_id, report_dt)` и обучает **LogisticRegression** на сырых `col_*`, сводя их к
-   единственному `propensity_score = P(treatment=1)`. Выход:
-   `[epk_id, report_dt, propensity_score]`.
+   `red_size` (по умолчанию 5) методом **StandardScaler + PCA** (`pyspark.ml`;
+   стандартизация перед PCA обязательна — он чувствителен к масштабу признаков). Выход:
+   `[epk_id, report_dt, red_0, ..., red_{red_size-1}]`.
+2. **`PropensityScorer`** (`propensity.py`) — джойнит эмбеддинги с таблицей трита и сводит
+   их к единственному `prop_score = P(treatment=1)`. Из **LogisticRegression** и
+   **GBTClassifier** берётся модель с лучшим ROC-AUC на отложенной выборке. Выход:
+   `[epk_id, report_dt, prop_score]`. **ROC-AUC — лишь selection-эвристика выбора модели**,
+   а не мера качества propensity для causal-задачи: высокий AUC означает почти
+   детерминированный трит и тянет за собой плохой overlap и экстремальные веса. Финальный
+   causal-критерий — баланс ковариат (`|SMD|`) и overlap/positivity **после** matching/IPW
+   (см. causal-слой ниже).
 
 Оба адаптера поддерживают **in-time safety**: при заданном `cutoff` обучение идёт только
 на `report_dt <= cutoff`, а применение — к более поздним срезам (без утечки из будущего;
 ср. подход R&D-6 «safe in-time CUPAC»).
+
+> **Миграция API (контракт R&D-7).** Имена приведены к финальной схеме:
+> вход `col_* → emb_{i}_val` (легаси `col_*` всё ещё распознаётся), выход reducer'а
+> `emb_000 → red_0`, propensity `propensity_score → prop_score`, параметр
+> `reducted_shape → red_size`. Старое имя `reducted_shape` сохранено как deprecated-alias
+> (с `DeprecationWarning`), чтобы не ломать ранее написанные ноутбуки/скрипты.
 
 Контракты схем и валидация — `contracts.py`; конфиг — `configs/07_embedding_adjustment_set/adapters.yaml`.
 

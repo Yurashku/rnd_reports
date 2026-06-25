@@ -110,6 +110,17 @@ def test_reducer_accepts_legacy_col_format(spark) -> None:
     assert out.columns == ["epk_id", "report_dt", "red_0", "red_1"]
 
 
+def test_reducer_reducted_shape_alias_deprecated(spark) -> None:
+    # Старое имя reducted_shape поддерживается с DeprecationWarning и эквивалентно red_size.
+    with pytest.warns(DeprecationWarning):
+        reducer = EmbeddingReducer(reducted_shape=2)
+    assert reducer.red_size == 2
+    out = reducer.fit_transform(_embeddings_df(spark))
+    assert out.columns == ["epk_id", "report_dt", "red_0", "red_1"]
+    with pytest.warns(DeprecationWarning):
+        assert reducer.reducted_shape == 2
+
+
 def test_reducer_transform_before_fit_raises(spark) -> None:
     with pytest.raises(RuntimeError):
         EmbeddingReducer().transform(_embeddings_df(spark))

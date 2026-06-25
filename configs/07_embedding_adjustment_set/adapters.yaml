@@ -14,7 +14,8 @@ reducer:
   red_size: 5
   seed: 42
 
-# Скрипт 2 — propensity: лучший из LogisticRegression / GBTClassifier по ROC-AUC.
+# Скрипт 2 — propensity: из LogisticRegression / GBTClassifier берётся модель с лучшим
+# ROC-AUC (selection-эвристика выбора модели, не causal-критерий — он balance/overlap).
 propensity:
   models: [logreg, gbt]
   max_iter: 100

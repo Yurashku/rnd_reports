@@ -5,9 +5,17 @@
 сводит эмбеддинги к одной колонке ``prop_score`` — она дальше пойдёт в
 propensity-score matching по Рубину (сам матчинг здесь не реализуется).
 
-«Лучшая методология»: сравниваем **LogisticRegression** и **GBTClassifier**
-(``pyspark.ml``) по ROC-AUC на отложенной выборке и в ``prop_score`` отдаём лучшую
-модель. AUC обеих сохраняются в ``metrics_``, имя выбранной — в ``best_model_name_``.
+Выбор модели: сравниваем **LogisticRegression** и **GBTClassifier** (``pyspark.ml``)
+по ROC-AUC на отложенной выборке и в ``prop_score`` отдаём модель с лучшим AUC. AUC обеих
+сохраняются в ``metrics_``, имя выбранной — в ``best_model_name_``.
+
+Важно: ROC-AUC здесь — **инженерная selection-эвристика** (чтобы не зашивать одну модель
+руками), а **не** мера качества propensity для causal-задачи. В PSM/IPW высокий AUC сам по
+себе нежелателен: он означает, что трит почти детерминирован эмбеддингами, и тянет за собой
+плохой overlap и экстремальные propensity/веса. Финальный causal-критерий — баланс ковариат
+(``|SMD|``) и overlap/positivity **после** matching/IPW; эти диагностики живут в
+numpy/sklearn-слое (:func:`rnd_reports.embeddings.overlap_diagnostics`,
+:func:`rnd_reports.embeddings.covariate_balance_after_adjustment`).
 
 Джойн трита: по ``(epk_id, report_dt)`` если в таблице трита есть ``report_dt``,
 иначе по ``epk_id`` (таблица псевдо-разбиения ``epk_id × treatment``).
@@ -36,7 +44,10 @@ _ARRAY_COL = "__prop_array__"
 
 
 class PropensityScorer:
-    """prop_score = P(treatment=1 | эмбеддинги); лучший из LogReg / GBT по ROC-AUC.
+    """prop_score = P(treatment=1 | эмбеддинги); из LogReg / GBT берётся лучший по ROC-AUC.
+
+    ROC-AUC — лишь selection-эвристика выбора модели, а не causal-критерий качества
+    propensity (он — баланс/overlap после matching/IPW, см. docstring модуля).
 
     Параметры:
         max_iter / reg_param: гиперпараметры ``LogisticRegression``;

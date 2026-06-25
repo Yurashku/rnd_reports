@@ -7,14 +7,17 @@
 - :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``red_size``
   (StandardScaler + PCA), отдаёт ``[epk_id, report_dt, red_0, ...]``;
 - :class:`PropensityScorer` — джойнит с таблицей псевдо-трита и сводит эмбеддинги к
-  одному ``prop_score`` = P(treatment=1) (лучший из LogisticRegression / GBTClassifier).
+  одному ``prop_score`` = P(treatment=1); из LogisticRegression / GBTClassifier берётся
+  модель с лучшим ROC-AUC (инженерная selection-эвристика, не causal-критерий качества).
 
 Оба адаптера поддерживают **in-time safety**: обучение только на ``report_dt <= cutoff``
 и применение к более поздним срезам (без утечки из будущего).
 
 pyspark — **опциональная** зависимость (extra ``spark``). Импорт самого пакета её
 не требует: контрактные хелперы доступны всегда, а Spark-адаптеры подгружаются лениво.
-Сам causal-эксперимент R&D-7 пока не реализован — см. :mod:`rnd_reports.embeddings.experiment`.
+Сам causal-эксперимент R&D-7 реализован в numpy/sklearn-слое
+(:mod:`rnd_reports.embeddings.experiment`, :mod:`rnd_reports.embeddings.synthetic`):
+оценка ATE с поправкой и диагностика баланса/overlap — pyspark для него не нужен.
 """
 
 from __future__ import annotations

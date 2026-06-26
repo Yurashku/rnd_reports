@@ -1,13 +1,12 @@
 """Скрипт 2 (R&D-7): propensity score (prop_score) из эмбеддингов.
 
-``PropensityScorer`` джойнит сырой эмбеддинг-датасет (``emb_{i}_val``) с таблицей
-псевдо-трита и обучает классификатор ``P(treatment=1 | эмбеддинги)``. ``transform``
-сводит эмбеддинги к одной колонке ``prop_score`` — она дальше пойдёт в
-propensity-score matching по Рубину (сам матчинг здесь не реализуется).
+``add_propensity_score`` обучает классификатор ``P(treatment=1 | эмбеддинги)`` и
+**добавляет** к исходному датафрейму колонку ``prop_score`` (все исходные колонки
+сохраняются). Если колонки ``treatment`` в датафрейме нет — она генерируется случайно
+(Bernoulli с фиксированным ``random_state``) и тоже добавляется к выходу.
 
 Выбор модели: сравниваем **LogisticRegression** и **GBTClassifier** (``pyspark.ml``)
-по ROC-AUC на отложенной выборке и в ``prop_score`` отдаём модель с лучшим AUC. AUC обеих
-сохраняются в ``metrics_``, имя выбранной — в ``best_model_name_``.
+по ROC-AUC на отложенной выборке и в ``prop_score`` отдаём модель с лучшим AUC.
 
 Важно: ROC-AUC здесь — **инженерная selection-эвристика** (чтобы не зашивать одну модель
 руками), а **не** мера качества propensity для causal-задачи. В PSM/IPW высокий AUC сам по
@@ -16,11 +15,6 @@ propensity-score matching по Рубину (сам матчинг здесь н
 (``|SMD|``) и overlap/positivity **после** matching/IPW; эти диагностики живут в
 numpy/sklearn-слое (:func:`rnd_reports.embeddings.overlap_diagnostics`,
 :func:`rnd_reports.embeddings.covariate_balance_after_adjustment`).
-
-Джойн трита: по ``(epk_id, report_dt)`` если в таблице трита есть ``report_dt``,
-иначе по ``epk_id`` (таблица псевдо-разбиения ``epk_id × treatment``).
-
-In-time safety: ``fit(..., cutoff=...)`` обучается только на ``report_dt <= cutoff``.
 
 Требует pyspark (extra ``spark``); импортируется лениво из пакета ``embeddings``.
 """
@@ -41,115 +35,104 @@ _LABEL_COL = "__prop_label__"
 _PROBABILITY_COL = "__prop_probability__"
 _RAW_COL = "__prop_raw__"
 _ARRAY_COL = "__prop_array__"
+_HASH_MOD = 1000  # гранулярность детерминированного псевдо-трита
 
 
-class PropensityScorer:
-    """prop_score = P(treatment=1 | эмбеддинги); из LogReg / GBT берётся лучший по ROC-AUC.
+def _random_treatment(epk_col, random_state: int, treatment_share: float):
+    """Детерминированный псевдо-случайный трит из хэша ``epk_id`` + сид.
 
-    ROC-AUC — лишь selection-эвристика выбора модели, а не causal-критерий качества
-    propensity (он — баланс/overlap после matching/IPW, см. docstring модуля).
-
-    Параметры:
-        max_iter / reg_param: гиперпараметры ``LogisticRegression``;
-        gbt_max_depth / gbt_max_iter: гиперпараметры ``GBTClassifier``;
-        val_fraction: доля отложенной выборки для честной оценки AUC;
-        seed: сид сплита и GBT.
-
-    Использование: ``fit(embeddings_df, treatment_df, cutoff)`` → ``transform(embeddings_df)``.
-    После ``fit`` доступны ``metrics_`` (AUC обеих моделей) и ``best_model_name_``.
+    ``F.rand`` нельзя: он недетерминирован между материализациями, поэтому метка «уехала»
+    бы между fit и оценкой (и относительно ``randomSplit``). Хэш стабилен для строки при
+    любом партиционировании/пересчёте.
     """
+    threshold = int(round(treatment_share * _HASH_MOD))
+    bucket = F.pmod(F.hash(epk_col, F.lit(random_state)), F.lit(_HASH_MOD))
+    return (bucket < F.lit(threshold)).cast("int")
 
-    def __init__(
-        self,
-        max_iter: int = 100,
-        reg_param: float = 0.0,
-        gbt_max_depth: int = 5,
-        gbt_max_iter: int = 20,
-        val_fraction: float = 0.3,
-        seed: int = 42,
-    ) -> None:
-        self.max_iter = max_iter
-        self.reg_param = reg_param
-        self.gbt_max_depth = gbt_max_depth
-        self.gbt_max_iter = gbt_max_iter
-        self.val_fraction = val_fraction
-        self.seed = seed
-        self._assembler: VectorAssembler | None = None
-        self._model = None
-        self.metrics_: dict[str, float] = {}
-        self.best_model_name_: str | None = None
 
-    @property
-    def is_fitted(self) -> bool:
-        return self._model is not None
+def _candidates(
+    max_iter: int, reg_param: float, gbt_max_depth: int, gbt_max_iter: int, seed: int
+) -> dict[str, object]:
+    """Кандидаты-классификаторы с общими колонками features/label/probability/raw.
 
-    def _candidates(self) -> dict[str, object]:
-        """Кандидаты-классификаторы с общими колонками features/label/probability/raw.
+    ``probabilityCol``/``rawPredictionCol`` задаём сеттерами: ``GBTClassifier`` не
+    принимает их как kwargs конструктора, хотя сами колонки умеет выдавать.
+    """
+    estimators = {
+        "logreg": LogisticRegression(
+            featuresCol=_FEATURES_COL, labelCol=_LABEL_COL,
+            maxIter=max_iter, regParam=reg_param,
+        ),
+        "gbt": GBTClassifier(
+            featuresCol=_FEATURES_COL, labelCol=_LABEL_COL,
+            maxDepth=gbt_max_depth, maxIter=gbt_max_iter, seed=seed,
+        ),
+    }
+    for est in estimators.values():
+        est.setProbabilityCol(_PROBABILITY_COL).setRawPredictionCol(_RAW_COL)
+    return estimators
 
-        ``probabilityCol``/``rawPredictionCol`` задаём сеттерами: ``GBTClassifier`` не
-        принимает их как kwargs конструктора, хотя сами колонки умеет выдавать.
-        """
-        estimators = {
-            "logreg": LogisticRegression(
-                featuresCol=_FEATURES_COL, labelCol=_LABEL_COL,
-                maxIter=self.max_iter, regParam=self.reg_param,
-            ),
-            "gbt": GBTClassifier(
-                featuresCol=_FEATURES_COL, labelCol=_LABEL_COL,
-                maxDepth=self.gbt_max_depth, maxIter=self.gbt_max_iter, seed=self.seed,
-            ),
-        }
-        for est in estimators.values():
-            est.setProbabilityCol(_PROBABILITY_COL).setRawPredictionCol(_RAW_COL)
-        return estimators
 
-    def fit(
-        self,
-        embeddings_df: DataFrame,
-        treatment_df: DataFrame,
-        cutoff=None,
-    ) -> "PropensityScorer":
-        """Джойн с тритом + выбор лучшего классификатора (LogReg/GBT) по ROC-AUC.
+def add_propensity_score(
+    df: DataFrame,
+    *,
+    treatment_col: str = contracts.TREATMENT,
+    score_col: str = contracts.PROPENSITY_SCORE,
+    random_state: int = 42,
+    treatment_share: float = 0.5,
+    max_iter: int = 100,
+    reg_param: float = 0.0,
+    gbt_max_depth: int = 5,
+    gbt_max_iter: int = 20,
+    val_fraction: float = 0.3,
+) -> DataFrame:
+    """Добавить ``score_col`` = P(treatment=1 | эмбеддинги) к исходному датафрейму.
 
-        При ``cutoff`` обучение только на ``report_dt <= cutoff`` (in-time safety).
-        """
-        feature_cols = contracts.validate_embedding_schema(embeddings_df)
-        contracts.validate_treatment_schema(treatment_df)
+    Если колонки ``treatment_col`` нет — она генерируется случайно
+    (``Bernoulli(treatment_share)`` с сидом ``random_state``) и добавляется к выходу.
+    Из LogReg/GBT берётся модель с лучшим ROC-AUC на отложенной доле ``val_fraction``;
+    выбор печатается одной строкой. Все исходные колонки сохраняются.
+    """
+    feature_cols = contracts.validate_embedding_schema(df)
 
-        join_keys = contracts.treatment_join_keys(treatment_df)
-        treatment = treatment_df.select(*join_keys, contracts.TREATMENT)
-        joined = embeddings_df.join(treatment, join_keys, how="inner")
-        if cutoff is not None:
-            joined = joined.filter(F.col(contracts.REPORT_DT) <= F.lit(cutoff))
-        labelled = joined.withColumn(_LABEL_COL, F.col(contracts.TREATMENT).cast("double"))
-
-        self._assembler = VectorAssembler(inputCols=feature_cols, outputCol=_FEATURES_COL)
-        assembled = self._assembler.transform(labelled)
-
-        # Честная оценка AUC на отложенной выборке; затем дообучаем лучшую модель на всех данных.
-        train, val = assembled.randomSplit([1.0 - self.val_fraction, self.val_fraction], seed=self.seed)
-        evaluator = BinaryClassificationEvaluator(
-            labelCol=_LABEL_COL, rawPredictionCol=_RAW_COL, metricName="areaUnderROC"
+    # Трит — опциональная колонка того же датафрейма. Нет → детерминированный псевдо-случайный
+    # трит из хэша epk_id + random_state (стабилен между материализациями, см. _random_treatment).
+    if treatment_col not in df.columns:
+        df = df.withColumn(
+            treatment_col,
+            _random_treatment(F.col(contracts.EPK_ID), random_state, treatment_share),
         )
-        for name, estimator in self._candidates().items():
-            scored = estimator.fit(train).transform(val)
-            self.metrics_[name] = float(evaluator.evaluate(scored))
 
-        self.best_model_name_ = max(self.metrics_, key=self.metrics_.get)
-        self._model = self._candidates()[self.best_model_name_].fit(assembled)
-        return self
+    labelled = df.withColumn(_LABEL_COL, F.col(treatment_col).cast("double"))
+    assembler = VectorAssembler(inputCols=feature_cols, outputCol=_FEATURES_COL)
+    assembled = assembler.transform(labelled)
 
-    def transform(self, embeddings_df: DataFrame) -> DataFrame:
-        """Вернуть ``[epk_id, report_dt, prop_score]`` (P(treatment=1) ∈ [0, 1])."""
-        if not self.is_fitted:
-            raise RuntimeError("PropensityScorer не обучен: вызовите fit(...) до transform(...)")
-        contracts.validate_embedding_schema(embeddings_df)
+    # Честная оценка AUC на отложенной выборке; затем дообучаем лучшую модель на всех данных.
+    train, val = assembled.randomSplit(
+        [1.0 - val_fraction, val_fraction], seed=random_state
+    )
+    evaluator = BinaryClassificationEvaluator(
+        labelCol=_LABEL_COL, rawPredictionCol=_RAW_COL, metricName="areaUnderROC"
+    )
+    candidates = _candidates(max_iter, reg_param, gbt_max_depth, gbt_max_iter, random_state)
+    metrics = {
+        name: float(evaluator.evaluate(est.fit(train).transform(val)))
+        for name, est in candidates.items()
+    }
+    best_name = max(metrics, key=metrics.get)
+    print(
+        "propensity ROC-AUC:",
+        {k: round(v, 4) for k, v in metrics.items()},
+        "| выбрана:", best_name,
+    )
 
-        assembled = self._assembler.transform(embeddings_df)
-        scored = self._model.transform(assembled)
-        with_array = scored.withColumn(_ARRAY_COL, vector_to_array(F.col(_PROBABILITY_COL)))
-        return with_array.select(
-            F.col(contracts.EPK_ID),
-            F.col(contracts.REPORT_DT),
-            F.col(_ARRAY_COL)[1].alias(contracts.PROPENSITY_SCORE),
-        )
+    fresh = _candidates(max_iter, reg_param, gbt_max_depth, gbt_max_iter, random_state)
+    model = fresh[best_name].fit(assembled)
+
+    scored = model.transform(assembled).withColumn(
+        _ARRAY_COL, vector_to_array(F.col(_PROBABILITY_COL))
+    )
+    scored = scored.withColumn(score_col, F.col(_ARRAY_COL)[1])
+    return scored.drop(
+        _FEATURES_COL, _LABEL_COL, _PROBABILITY_COL, _RAW_COL, _ARRAY_COL, "prediction"
+    )

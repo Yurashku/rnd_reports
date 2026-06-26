@@ -49,19 +49,6 @@ def test_validate_embedding_schema_ok_and_errors() -> None:
         contracts.validate_embedding_schema(_fake_df(["epk_id", "report_dt"]))
 
 
-def test_validate_treatment_schema_and_join_keys() -> None:
-    # report_dt опционален: таблица псевдо-разбиения может быть epk_id × treatment.
-    with_dt = _fake_df(["epk_id", "report_dt", "treatment"])
-    no_dt = _fake_df(["epk_id", "treatment"])
-    assert contracts.validate_treatment_schema(with_dt) is None
-    assert contracts.validate_treatment_schema(no_dt) is None
-    assert contracts.treatment_join_keys(with_dt) == ["epk_id", "report_dt"]
-    assert contracts.treatment_join_keys(no_dt) == ["epk_id"]
-
-    with pytest.raises(ValueError):  # нет treatment
-        contracts.validate_treatment_schema(_fake_df(["epk_id", "report_dt"]))
-
-
 def test_lazy_adapters_attribute_error() -> None:
     with pytest.raises(AttributeError):
         _ = embeddings.NotAnAdapter

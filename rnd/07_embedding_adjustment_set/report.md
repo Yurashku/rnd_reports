@@ -1,6 +1,6 @@
 # R&D-7. Эмбеддинги как adjustment set в нерандомизированном испытании
 
-> Статус: 🔶 базовый эксперимент готов. Реализованы тулкит-адаптеры (pyspark) **и** causal-слой
+> Статус: 🔶 базовый эксперимент готов. Реализованы тулкит-функции (pyspark) **и** causal-слой
 > (numpy/sklearn): оценка ATE с поправкой, диагностика баланса/overlap. Источник чисел —
 > `notebook.ipynb` (синтетика, seed=11).
 
@@ -20,36 +20,27 @@ epk_id, report_dt (месячная гранулярность), emb_0_val, emb_
 ```
 
 Поддерживается и легаси-формат `col_000, col_001, ...` (старая витрина) — детектор колонок
-распознаёт оба. Назначение воздействия хранится отдельно — таблица трита с колонками
-`epk_id, treatment` (бинарный); `report_dt` опционален: если он есть, джойн идёт по
-`(epk_id, report_dt)`, иначе по `epk_id` (таблица псевдо-разбиения `epk_id × treatment`).
+распознаёт оба. Назначение воздействия — **опциональная колонка `treatment`** того же
+датафрейма (отдельной таблицы трита нет): если её нет, p-score синтезирует случайный трит
+(`random_state`).
 
-## Тулкит-адаптеры (готово)
+## Тулкит-функции (готово)
 
-Реализованы в пакете `src/rnd_reports/embeddings/` как «переходники» данных:
+Реализованы в пакете `src/rnd_reports/embeddings/`. Каждая принимает один pyspark `DataFrame`
+и возвращает его же с **добавленными** колонками (все исходные сохраняются):
 
-1. **`EmbeddingReducer`** (`reducer.py`) — снижает размерность эмбеддингов до
-   `red_size` (по умолчанию 5) методом **StandardScaler + PCA** (`pyspark.ml`;
-   стандартизация перед PCA обязательна — он чувствителен к масштабу признаков). Выход:
-   `[epk_id, report_dt, red_0, ..., red_{red_size-1}]`.
-2. **`PropensityScorer`** (`propensity.py`) — джойнит эмбеддинги с таблицей трита и сводит
-   их к единственному `prop_score = P(treatment=1)`. Из **LogisticRegression** и
-   **GBTClassifier** берётся модель с лучшим ROC-AUC на отложенной выборке. Выход:
-   `[epk_id, report_dt, prop_score]`. **ROC-AUC — лишь selection-эвристика выбора модели**,
-   а не мера качества propensity для causal-задачи: высокий AUC означает почти
-   детерминированный трит и тянет за собой плохой overlap и экстремальные веса. Финальный
-   causal-критерий — баланс ковариат (`|SMD|`) и overlap/positivity **после** matching/IPW
-   (см. causal-слой ниже).
-
-Оба адаптера поддерживают **in-time safety**: при заданном `cutoff` обучение идёт только
-на `report_dt <= cutoff`, а применение — к более поздним срезам (без утечки из будущего;
-ср. подход R&D-6 «safe in-time CUPAC»).
-
-> **Миграция API (контракт R&D-7).** Имена приведены к финальной схеме:
-> вход `col_* → emb_{i}_val` (легаси `col_*` всё ещё распознаётся), выход reducer'а
-> `emb_000 → red_0`, propensity `propensity_score → prop_score`, параметр
-> `reducted_shape → red_size`. Старое имя `reducted_shape` сохранено как deprecated-alias
-> (с `DeprecationWarning`), чтобы не ломать ранее написанные ноутбуки/скрипты.
+1. **`reduce_embeddings(df, red_size=5)`** (`reducer.py`) — снижает размерность эмбеддингов
+   методом **StandardScaler + PCA** (`pyspark.ml`; стандартизация перед PCA обязательна — он
+   чувствителен к масштабу признаков) и добавляет колонки `red_0, ..., red_{red_size-1}`.
+   PCA детерминирован (SVD) — сид не нужен.
+2. **`add_propensity_score(df, ...)`** (`propensity.py`) — сводит эмбеддинги к единственному
+   `prop_score = P(treatment=1)` и добавляет его. Трит берётся из колонки `treatment`; если
+   её нет — генерируется случайно (`Bernoulli(treatment_share)` с `random_state`) и тоже
+   добавляется. Из **LogisticRegression** и **GBTClassifier** берётся модель с лучшим ROC-AUC
+   на отложенной выборке. **ROC-AUC — лишь selection-эвристика выбора модели**, а не мера
+   качества propensity для causal-задачи: высокий AUC означает почти детерминированный трит и
+   тянет за собой плохой overlap и экстремальные веса. Финальный causal-критерий — баланс
+   ковариат (`|SMD|`) и overlap/positivity **после** matching/IPW (см. causal-слой ниже).
 
 Контракты схем и валидация — `contracts.py`; конфиг — `configs/07_embedding_adjustment_set/adapters.yaml`.
 
@@ -94,7 +85,7 @@ epk_id, report_dt (месячная гранулярность), emb_0_val, emb_
   практичным adjustment set в наблюдательном испытании — **при условии overlap/positivity**.
 - Ограничения: результат на синтетике с известным ATE; на реальных данных нужны проверка overlap и
   sensitivity к неучтённым конфаундерам (unconfoundedness напрямую не тестируема). Production-путь —
-  pyspark-адаптеры `EmbeddingReducer`/`PropensityScorer` с in-time safety (обучение на `report_dt <= cutoff`).
+  pyspark-функции `reduce_embeddings`/`add_propensity_score` (каждая добавляет свои колонки к датафрейму).
 
 ## Воспроизведение
 ```bash

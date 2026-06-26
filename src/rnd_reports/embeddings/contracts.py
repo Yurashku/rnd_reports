@@ -1,9 +1,10 @@
 """Контракты входных/выходных схем адаптеров R&D-7 (без Spark-зависимостей).
 
-Только проверки структуры и имена колонок — **без алгоритмов**. Сами адаптеры
+Только проверки структуры и имена колонок — **без алгоритмов**. Сами функции
 (PCA-снижение, propensity) живут в :mod:`reducer` / :mod:`propensity`.
 
 Формат сырой таблицы эмбеддингов: ``epk_id, report_dt, emb_0_val, emb_1_val, ...``.
+Трит (``treatment``) — опциональная колонка того же датафрейма (отдельной таблицы нет).
 Поддерживается и легаси-формат ``col_000, col_001, ...`` (старая витрина R&D-7), чтобы
 один контракт обслуживал оба ноутбука.
 
@@ -64,16 +65,3 @@ def validate_embedding_schema(df) -> list[str]:
             "Не найдено ни одной эмбеддинг-колонки формата 'emb_{i}_val' (или легаси 'col_{i}')"
         )
     return embeddings
-
-
-def validate_treatment_schema(df) -> None:
-    """Проверить схему датасета трита: нужны ``epk_id`` и ``treatment`` (``report_dt`` опционален)."""
-    cols = set(df.columns)
-    missing = [c for c in (EPK_ID, TREATMENT) if c not in cols]
-    if missing:
-        raise ValueError(f"В датасете трита нет колонок: {missing}")
-
-
-def treatment_join_keys(df) -> list[str]:
-    """Ключи джойна трита с эмбеддингами: ``[epk_id, report_dt]`` если есть ``report_dt``, иначе ``[epk_id]``."""
-    return list(KEY_COLUMNS) if REPORT_DT in set(df.columns) else [EPK_ID]

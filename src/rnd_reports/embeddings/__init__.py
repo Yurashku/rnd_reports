@@ -1,17 +1,16 @@
-"""Тулкит-адаптеры R&D-7: эмбеддинги клиента как adjustment set.
+"""Тулкит-функции R&D-7: эмбеддинги клиента как adjustment set.
 
-Адаптеры-«переходники» поверх pyspark-датасета со схемой
+Функции-«переходники» поверх pyspark-датасета со схемой
 ``epk_id, report_dt, emb_0_val, emb_1_val, ..., emb_n_val`` (поддерживается и
-легаси-формат ``col_000, ...``):
+легаси-формат ``col_000, ...``). Каждая принимает один ``DataFrame`` и возвращает его же
+с **добавленными** колонками:
 
-- :class:`EmbeddingReducer` — снижает размерность эмбеддингов до ``red_size``
-  (StandardScaler + PCA), отдаёт ``[epk_id, report_dt, red_0, ...]``;
-- :class:`PropensityScorer` — джойнит с таблицей псевдо-трита и сводит эмбеддинги к
-  одному ``prop_score`` = P(treatment=1); из LogisticRegression / GBTClassifier берётся
+- :func:`reduce_embeddings` — снижает размерность эмбеддингов до ``red_size``
+  (StandardScaler + PCA), добавляет колонки ``red_0, ..., red_{red_size-1}``;
+- :func:`add_propensity_score` — сводит эмбеддинги к одному ``prop_score`` = P(treatment=1)
+  и добавляет его; трит — опциональная колонка того же датафрейма, при отсутствии
+  генерируется случайно (``random_state``). Из LogisticRegression / GBTClassifier берётся
   модель с лучшим ROC-AUC (инженерная selection-эвристика, не causal-критерий качества).
-
-Оба адаптера поддерживают **in-time safety**: обучение только на ``report_dt <= cutoff``
-и применение к более поздним срезам (без утечки из будущего).
 
 pyspark — **опциональная** зависимость (extra ``spark``). Импорт самого пакета её
 не требует: контрактные хелперы доступны всегда, а Spark-адаптеры подгружаются лениво.
@@ -33,7 +32,6 @@ from .contracts import (
     embedding_feature_columns,
     reduced_column_names,
     validate_embedding_schema,
-    validate_treatment_schema,
 )
 
 __all__ = [
@@ -47,9 +45,8 @@ __all__ = [
     "embedding_feature_columns",
     "reduced_column_names",
     "validate_embedding_schema",
-    "validate_treatment_schema",
-    "EmbeddingReducer",
-    "PropensityScorer",
+    "reduce_embeddings",
+    "add_propensity_score",
     # causal-эксперимент (numpy/sklearn, без pyspark)
     "make_embedding_observational_scenario",
     "estimate_ate_with_adjustment",
@@ -71,14 +68,14 @@ from .synthetic import make_embedding_observational_scenario  # noqa: E402
 
 
 def __getattr__(name: str):
-    # Ленивая загрузка Spark-зависимых адаптеров: ``import rnd_reports.embeddings``
+    # Ленивая загрузка Spark-зависимых функций: ``import rnd_reports.embeddings``
     # не должен требовать установленного pyspark (см. test_rnd7_imports).
-    if name == "EmbeddingReducer":
-        from .reducer import EmbeddingReducer
+    if name == "reduce_embeddings":
+        from .reducer import reduce_embeddings
 
-        return EmbeddingReducer
-    if name == "PropensityScorer":
-        from .propensity import PropensityScorer
+        return reduce_embeddings
+    if name == "add_propensity_score":
+        from .propensity import add_propensity_score
 
-        return PropensityScorer
+        return add_propensity_score
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

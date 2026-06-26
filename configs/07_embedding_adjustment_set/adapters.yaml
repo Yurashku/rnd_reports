@@ -1,21 +1,21 @@
-# Дефолты тулкит-адаптеров R&D-7 (эмбеддинги как adjustment set).
+# Дефолты тулкит-функций R&D-7 (эмбеддинги как adjustment set).
 # Используются ноутбуком-витриной поверх rnd_reports.embeddings.
 
 columns:
   epk_id: epk_id
   report_dt: report_dt          # месячная гранулярность
-  treatment: treatment
+  treatment: treatment           # опциональная колонка того же датафрейма
   embedding_prefix: emb_         # входные эмбеддинги emb_0_val, emb_1_val, ... (легаси: col_000)
-  reduced_prefix: red_           # выход reducer'а red_0, red_1, ...
+  reduced_prefix: red_           # выход reduce_embeddings: red_0, red_1, ...
   propensity_score: prop_score
 
-# Скрипт 1 — снижение размерности (StandardScaler + PCA).
+# Скрипт 1 — reduce_embeddings: снижение размерности (StandardScaler + PCA, детерминирован).
 reducer:
   red_size: 5
-  seed: 42
 
-# Скрипт 2 — propensity: из LogisticRegression / GBTClassifier берётся модель с лучшим
-# ROC-AUC (selection-эвристика выбора модели, не causal-критерий — он balance/overlap).
+# Скрипт 2 — add_propensity_score: из LogisticRegression / GBTClassifier берётся модель с
+# лучшим ROC-AUC (selection-эвристика выбора модели, не causal-критерий — он balance/overlap).
+# Трит — опциональная колонка treatment; при отсутствии генерируется случайно (random_state).
 propensity:
   models: [logreg, gbt]
   max_iter: 100
@@ -23,8 +23,5 @@ propensity:
   gbt_max_depth: 5
   gbt_max_iter: 20
   val_fraction: 0.3
-  seed: 42
-
-# In-time safety: при заданном cutoff адаптеры обучаются только на report_dt <= cutoff.
-in_time:
-  cutoff: null
+  random_state: 42
+  treatment_share: 0.5

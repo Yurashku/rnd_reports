@@ -61,6 +61,7 @@ archive/             # исторические/демо-ноутбуки (вн�
 | 06 | `rnd/06_safe_intime_cupac/` | 🚧 active | «Safe in-time covariates для CUPAC-style снижения дисперсии». |
 | 07 | `rnd/07_embedding_adjustment_set/` | 🚧 active | Эмбеддинги как adjustment set в нерандомизированном испытании (готов тулкит-адаптеры; эксперимент — заглушки). |
 | 08 | `rnd/08_multiple_testing/` | 🚧 active | Сравнение методов множественного тестирования OR-региона (Bonferroni/Holm/WY/RW + BH): single-table + Monte-Carlo. |
+| 09 | [`rnd/09_pilot_outliers/`](rnd/09_pilot_outliers/report.md) | ✅ done | Обработка аномалий при пост-анализе пилотов. Порог по метрике и Isolation Forest, устойчивость средних и интерпретация результата. |
 
 ### Общий код — `src/rnd_reports/`
 

@@ -58,10 +58,13 @@ archive/             # исторические/демо-ноутбуки (вн�
 | 03 | `rnd/03_autoconfig_homogeneity_split/` | ✅ done | Автоконфиг и контроль однородности сплита. |
 | 04 | `rnd/04_faiss_matcher_tradeoff/` | 📄 report-only | FAISS-матчинг и trade-off; разработка ведётся вне этого репозитория. |
 | 05 | `rnd/05_iv_cupac_policy/` | ⏸ paused | Пилот с one-sided noncompliance: baseline A/B, Wald LATE, 2SLS, CUPAC, policy-based OPE. |
-| 06 | `rnd/06_safe_intime_cupac/` | 🚧 active | «Safe in-time covariates для CUPAC-style снижения дисперсии». |
+| 06 | [`rnd/06_safe_intime_cupac/`](rnd/06_safe_intime_cupac/report.md) | ✅ годовой отчёт принят | Исследование допустимости признаков периода эксперимента для повышения точности оценки эффекта. С ДИЭ обсуждается порядок отбора признаков после воздействия. |
 | 07 | `rnd/07_embedding_adjustment_set/` | 🚧 active | Эмбеддинги как adjustment set в нерандомизированном испытании (готов тулкит-адаптеры; эксперимент — заглушки). |
 | 08 | `rnd/08_multiple_testing/` | 🚧 active | Сравнение методов множественного тестирования OR-региона (Bonferroni/Holm/WY/RW + BH): single-table + Monte-Carlo. |
 | 09 | [`rnd/09_pilot_outliers/`](rnd/09_pilot_outliers/report.md) | ✅ done | Обработка аномалий при пост-анализе пилотов. Порог по метрике и Isolation Forest, устойчивость средних и интерпретация результата. |
+| 10 | [`rnd/10_offpolicylab/`](rnd/10_offpolicylab/report.md) | ✅ done | Сравнение политик по логам и стратегия калибровки редкими A/B-тестами. |
+| 11 | [`rnd/11_varwar/`](rnd/11_varwar/report.md) | ✅ done | Мощность и точность процедур. Корректировка Лина предложена для рассмотрения в HypEx. |
+| 12 | [`rnd/12_competitive_nps/`](rnd/12_competitive_nps/report.md) | ✅ done | Сопоставимость аудиторий, мощность парных сравнений и правила интерпретации NPS. |
 
 ### Общий код — `src/rnd_reports/`
 
